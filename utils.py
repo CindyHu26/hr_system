@@ -37,7 +37,16 @@ SALARY_ITEM_COLUMNS_MAP = {
     'is_active': '是否啟用'
 }
 
-
+SALARY_BASE_HISTORY_COLUMNS_MAP = {
+    'id': '紀錄ID',
+    'employee_id': '員工系統ID',
+    'name_ch': '員工姓名',
+    'base_salary': '底薪',
+    'dependents': '眷屬數',
+    'start_date': '生效日',
+    'end_date': '結束日',
+    'note': '備註'
+}
 
 load_dotenv()
 DEFAULT_GSHEET_URL = os.getenv("GSHEET_URL")
@@ -925,33 +934,57 @@ def delete_salary_records(conn, year, month):
         raise e
     
 
-def show_salary_base_history_tab(conn):
-    """員工底薪／眷屬異動紀錄"""
-    st.subheader("員工底薪／眷屬異動紀錄")
-    emp_df = pd.read_sql_query("SELECT id, name_ch FROM employee", conn)
-    his_df = pd.read_sql_query(
-        "SELECT sh.id, e.name_ch as 姓名, sh.base_salary as 底薪, sh.dependents as 眷屬, sh.start_date as 生效日, sh.end_date as 結束日, sh.note as 備註 "
-        "FROM salary_base_history sh JOIN employee e ON sh.employee_id=e.id ORDER BY e.id, sh.start_date DESC",
-        conn
-    )
-    st.dataframe(his_df, use_container_width=True)
+def get_salary_base_history(conn):
+    """取得所有員工的底薪/眷屬異動歷史"""
+    query = """
+    SELECT
+        sh.id, sh.employee_id, e.name_ch, sh.base_salary,
+        sh.dependents, sh.start_date, sh.end_date, sh.note
+    FROM salary_base_history sh
+    JOIN employee e ON sh.employee_id = e.id
+    ORDER BY e.name_ch, sh.start_date DESC
+    """
+    return pd.read_sql_query(query, conn)
 
-    st.write("---")
-    st.markdown("#### 新增異動紀錄")
-    names = emp_df["name_ch"].tolist()
-    sel = st.selectbox("選擇員工", names, key="sb_history_emp")
-    emp_id = emp_df[emp_df["name_ch"]==sel]["id"].iloc[0]
-    base = st.number_input("底薪", value=30000, step=500, key="sb_base")
-    dep = st.number_input("眷屬數", value=0, step=1, key="sb_dep")
-    start_date = st.date_input("生效日", key="sb_start")
-    end_date = st.date_input("結束日", value=None, key="sb_end")
-    note = st.text_area("備註", value="", key="sb_note")
-    if st.button("新增異動紀錄", key="sb_add"):
-        end_date_val = end_date.strftime("%Y-%m-%d") if end_date else None
-        conn.execute(
-            "INSERT INTO salary_base_history (employee_id, base_salary, dependents, start_date, end_date, note) VALUES (?, ?, ?, ?, ?, ?)",
-            (emp_id, base, dep, start_date.strftime("%Y-%m-%d"), end_date_val, note)
-        )
-        conn.commit()
-        st.success("異動已新增")
-        st.rerun()
+def add_salary_base_history(conn, data):
+    """新增一筆底薪/眷屬異動歷史"""
+    cursor = conn.cursor()
+    sql = """
+    INSERT INTO salary_base_history
+    (employee_id, base_salary, dependents, start_date, end_date, note)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """
+    # 將日期物件轉換為字串，並處理 None
+    start_date_str = data['start_date'].strftime('%Y-%m-%d') if data['start_date'] else None
+    end_date_str = data['end_date'].strftime('%Y-%m-%d') if data['end_date'] else None
+    
+    cursor.execute(sql, (
+        data['employee_id'], data['base_salary'], data['dependents'],
+        start_date_str, end_date_str, data['note']
+    ))
+    conn.commit()
+
+def update_salary_base_history(conn, record_id, data):
+    """更新指定的底薪/眷屬異動歷史"""
+    cursor = conn.cursor()
+    sql = """
+    UPDATE salary_base_history SET
+    base_salary = ?, dependents = ?, start_date = ?, end_date = ?, note = ?
+    WHERE id = ?
+    """
+    # 將日期物件轉換為字串，並處理 None
+    start_date_str = data['start_date'].strftime('%Y-%m-%d') if data['start_date'] else None
+    end_date_str = data['end_date'].strftime('%Y-%m-%d') if data['end_date'] else None
+
+    cursor.execute(sql, (
+        data['base_salary'], data['dependents'], start_date_str,
+        end_date_str, data['note'], record_id
+    ))
+    conn.commit()
+
+def delete_salary_base_history(conn, record_id):
+    """刪除指定的底薪/眷屬異動歷史"""
+    cursor = conn.cursor()
+    sql = "DELETE FROM salary_base_history WHERE id = ?"
+    cursor.execute(sql, (record_id,))
+    conn.commit()
