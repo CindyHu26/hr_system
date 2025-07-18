@@ -10,6 +10,9 @@ from datetime import datetime, time, date, timedelta
 from pathlib import Path
 from calendar import monthrange
 from dateutil.relativedelta import relativedelta
+import os
+from dotenv import load_dotenv
+
 
 # --- 常數設定 ---
 SCRIPT_DIR = Path(__file__).parent
@@ -27,8 +30,15 @@ COMPANY_COLUMNS_MAP = {
     'owner': '負責人', 'ins_code': '投保代號', 'note': '備註'
 }
 
-import os
-from dotenv import load_dotenv
+SALARY_ITEM_COLUMNS_MAP = {
+    'id': 'ID',
+    'name': '項目名稱',
+    'type': '類型',
+    'is_active': '是否啟用'
+}
+
+
+
 load_dotenv()
 DEFAULT_GSHEET_URL = os.getenv("GSHEET_URL")
 
@@ -755,6 +765,20 @@ def update_salary_item(conn, item_id, data):
     sql = "UPDATE salary_item SET name = ?, type = ?, is_active = ? WHERE id = ?"
     cursor.execute(sql, (data['name'], data['type'], data['is_active'], item_id))
     conn.commit()
+
+def delete_salary_item(conn, item_id):
+    """
+    刪除指定的薪資項目
+    - 啟用外鍵約束，如果項目已被 salary_detail 引用，將會拋出 IntegrityError
+    """
+    cursor = conn.cursor()
+    # 啟用外鍵約束，確保資料完整性
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    sql = "DELETE FROM salary_item WHERE id = ?"
+    cursor.execute(sql, (item_id,))
+    conn.commit()
+    # 回傳被刪除的行數，可用於判斷是否成功
+    return cursor.rowcount
 
 def check_salary_record_exists(conn, year, month):
     """檢查指定年月的薪資紀錄是否存在"""
