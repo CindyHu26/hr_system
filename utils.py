@@ -27,7 +27,10 @@ COMPANY_COLUMNS_MAP = {
     'owner': '負責人', 'ins_code': '投保代號', 'note': '備註'
 }
 
-DEFAULT_GSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQmSMU8amrjeav4mKoC4nY3TmPtDFtTfFwQiGjp8NTOFb7KoGc9b23KDSb5T6uKLoRe52iI62wDQvPU/pub?gid=980168545&single=true&output=csv"
+import os
+from dotenv import load_dotenv
+load_dotenv()
+DEFAULT_GSHEET_URL = os.getenv("GSHEET_URL")
 
 # --- 資料庫連線 ---
 @st.cache_resource

@@ -13,3 +13,5 @@ __pycache__/
 # Text & batch files
 *.txt
 *.bat
+
+.env
