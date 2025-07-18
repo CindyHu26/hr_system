@@ -23,6 +23,9 @@ def show_page(conn):
     try:
         history_df_raw = get_salary_base_history(conn)
         history_df_display = history_df_raw.rename(columns=SALARY_BASE_HISTORY_COLUMNS_MAP)
+        # 格式化眷屬數欄位以顯示小數
+        if '眷屬數' in history_df_display.columns:
+            history_df_display['眷屬數'] = history_df_display['眷屬數'].map('{:,.2f}'.format)
         st.dataframe(history_df_display, use_container_width=True)
     except Exception as e:
         st.error(f"讀取歷史紀錄時發生錯誤: {e}")
@@ -49,7 +52,7 @@ def show_page(conn):
                 
                 c1, c2 = st.columns(2)
                 base_salary = c1.number_input("底薪*", min_value=0, step=100)
-                dependents = c2.number_input("眷屬數*", min_value=0, step=1)
+                dependents = c2.number_input("眷屬數*", min_value=0.0, step=0.01, format="%.2f")
                 
                 c3, c4 = st.columns(2)
                 start_date = c3.date_input("生效日*", value=datetime.now())
@@ -97,7 +100,7 @@ def show_page(conn):
                     
                     c1, c2 = st.columns(2)
                     base_salary_edit = c1.number_input("底薪", min_value=0, step=100, value=int(record_data['base_salary']))
-                    dependents_edit = c2.number_input("眷屬數", min_value=0, step=1, value=int(record_data['dependents']))
+                    dependents_edit = c2.number_input("眷屬數", min_value=0.0, step=0.01, format="%.2f", value=float(record_data['dependents']))
 
                     # 安全地轉換日期
                     start_date_val = datetime.strptime(record_data['start_date'], '%Y-%m-%d').date() if record_data['start_date'] else None

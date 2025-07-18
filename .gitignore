@@ -1,5 +1,6 @@
 # Python cache
 __pycache__/
+.vscode/
 
 # Excel files
 *.xlsx
@@ -13,5 +14,6 @@ __pycache__/
 # Text & batch files
 *.txt
 *.bat
+*.json
 
 .env

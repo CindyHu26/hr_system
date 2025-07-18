@@ -128,9 +128,6 @@ def create_tables(conn):
     )
     """)
 
-    conn.commit()
-    print("資料表建立完成！")
-
     # 員工底薪與眷屬紀錄表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS salary_base_history (
@@ -144,6 +141,23 @@ def create_tables(conn):
         FOREIGN KEY(employee_id) REFERENCES employee(id)
     )
     """)
+
+    # 勞健保級距表
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS insurance_grade (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,              -- 'labor' 或 'health'
+        grade INTEGER NOT NULL,          -- 級距
+        salary_min INTEGER NOT NULL,     -- 投保薪資下限
+        salary_max INTEGER NOT NULL,     -- 投保薪資上限
+        employee_fee INTEGER,            -- 員工負擔費用
+        employer_fee INTEGER,            -- 雇主負擔費用
+        gov_fee INTEGER,                 -- 政府補助費用
+        note TEXT                        -- 備註，例如：適用日期
+    )
+    """)
+    # 為 type 和 grade 建立唯一索引，防止重複資料
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_insurance_grade_type_grade ON insurance_grade (type, grade)")
 
     conn.commit()
     print("資料表建立完成！")

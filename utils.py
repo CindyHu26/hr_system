@@ -988,3 +988,73 @@ def delete_salary_base_history(conn, record_id):
     sql = "DELETE FROM salary_base_history WHERE id = ?"
     cursor.execute(sql, (record_id,))
     conn.commit()
+
+# --- 勞健保級距相關函式 ---
+def get_insurance_grades(conn):
+    """取得所有勞健保級距資料"""
+    return pd.read_sql_query("SELECT * FROM insurance_grade ORDER BY type, grade", conn)
+
+def batch_insert_insurance_grades(conn, df, grade_type):
+    """
+    批次匯入級距資料。此操作會先刪除該類別的所有舊資料，再插入新資料。
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute("BEGIN TRANSACTION")
+        
+        # 1. 刪除該類別的舊資料
+        cursor.execute("DELETE FROM insurance_grade WHERE type = ?", (grade_type,))
+        
+        # 2. 準備並插入新資料
+        # 確保欄位存在，若不存在則給予預設值
+        required_cols = {
+            'grade': 0, 'salary_min': 0, 'salary_max': 0,
+            'employee_fee': None, 'employer_fee': None, 'gov_fee': None, 'note': None
+        }
+        for col, default in required_cols.items():
+            if col not in df.columns:
+                df[col] = default
+        
+        # 過濾出需要的欄位，並加上 type
+        df_to_insert = df[list(required_cols.keys())].copy()
+        df_to_insert['type'] = grade_type
+        
+        # 產生 SQL 語句
+        cols = ['type'] + list(required_cols.keys())
+        placeholders = ','.join(['?'] * len(cols))
+        sql = f"INSERT INTO insurance_grade ({','.join(cols)}) VALUES ({placeholders})"
+        
+        # 轉換為元組列表以供 executemany
+        data_tuples = [tuple(row) for row in df_to_insert[cols].to_numpy()]
+        
+        cursor.executemany(sql, data_tuples)
+        
+        conn.commit()
+        return len(data_tuples)
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+def update_insurance_grade(conn, record_id, data):
+    """更新單筆級距資料"""
+    cursor = conn.cursor()
+    sql = """
+    UPDATE insurance_grade SET
+    salary_min = ?, salary_max = ?, employee_fee = ?,
+    employer_fee = ?, gov_fee = ?, note = ?
+    WHERE id = ?
+    """
+    cursor.execute(sql, (
+        data['salary_min'], data['salary_max'], data['employee_fee'],
+        data['employer_fee'], data['gov_fee'], data['note'],
+        record_id
+    ))
+    conn.commit()
+
+def delete_insurance_grade(conn, record_id):
+    """刪除單筆級距資料"""
+    cursor = conn.cursor()
+    sql = "DELETE FROM insurance_grade WHERE id = ?"
+    cursor.execute(sql, (record_id,))
+    conn.commit()

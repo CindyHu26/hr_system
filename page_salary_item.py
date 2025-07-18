@@ -15,7 +15,7 @@ def show_page(conn):
     顯示薪資項目管理頁面 (CRUD)
     """
     st.header("薪資項目管理 (Salary Item)")
-    st.info("您可以在此頁面統一管理薪資單中的所有「給與」或「扣除」項目。")
+    st.info("您可以在此頁面統一管理薪資單中的所有「給付」或「扣除」項目。")
 
     # --- 1. 顯示現有項目 (Read) ---
     st.subheader("目前所有薪資項目")
@@ -58,7 +58,7 @@ def show_page(conn):
         with st.form("salary_item_form", clear_on_submit=False):
             st.markdown(f"**{form_title}**")
             name = st.text_input("項目名稱*", value=item_data.get('name', ''), help="例如：底薪、伙食津貼、勞健保費")
-            type_options = {'earning': '給與 (Earning)', 'deduction': '扣除 (Deduction)'}
+            type_options = {'earning': '給付 (Earning)', 'deduction': '扣除 (Deduction)'}
             # 反向查找當前選項的 key
             current_type_key = item_data.get('type', 'earning')
             type = st.selectbox("項目類型*", options=list(type_options.keys()), format_func=lambda x: type_options[x], index=list(type_options.keys()).index(current_type_key))
