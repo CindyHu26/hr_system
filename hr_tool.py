@@ -6,7 +6,8 @@ from page_crud_employee import show_page as show_employee_page
 from page_crud_company import show_page as show_company_page
 from page_crud_attendance import show_page as show_attendance_crud_page
 from page_leave_analysis import show_page as show_analysis_page
-from page_salary_item import show_page as show_salary_item_page 
+from page_salary_item import show_page as show_salary_item_page
+from page_salary_base_history import show_page as show_salary_base_history_page
 
 # 建立資料庫連線
 conn = init_connection()
@@ -18,6 +19,7 @@ PAGES = {
     "出勤紀錄管理 (CRUD)": show_attendance_crud_page,
     "請假與異常分析": show_analysis_page,
     "薪資項目管理": show_salary_item_page,
+    "員工薪資異動管理": show_salary_base_history_page,
 }
 
 st.sidebar.title("HRIS 人資系統")
