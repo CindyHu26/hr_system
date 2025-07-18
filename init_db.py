@@ -131,6 +131,23 @@ def create_tables(conn):
     conn.commit()
     print("資料表建立完成！")
 
+    # 員工底薪與眷屬紀錄表
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS salary_base_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER NOT NULL,
+        base_salary INTEGER NOT NULL,
+        dependents REAL DEFAULT 0,
+        start_date DATE,
+        end_date DATE,
+        note TEXT,
+        FOREIGN KEY(employee_id) REFERENCES employee(id)
+    )
+    """)
+
+    conn.commit()
+    print("資料表建立完成！")
+
 if __name__ == '__main__':
     conn = sqlite3.connect(DB_NAME)
     create_tables(conn)
