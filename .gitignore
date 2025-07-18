@@ -1,0 +1,15 @@
+# Python cache
+__pycache__/
+
+# Excel files
+*.xlsx
+
+# CSV files
+*.csv
+
+# Database files
+*.db
+
+# Text & batch files
+*.txt
+*.bat
