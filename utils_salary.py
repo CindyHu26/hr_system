@@ -414,3 +414,269 @@ def delete_employee_salary_item(conn, record_id):
     cursor.execute(sql, (record_id,))
     conn.commit()
     return cursor.rowcount
+
+# --- 薪資單產生與計算核心函式 (Salary Calculation) ---
+
+def check_salary_records_exist(conn, year, month):
+    """檢查指定年月的薪資主紀錄是否存在"""
+    query = "SELECT 1 FROM salary WHERE year = ? AND month = ? LIMIT 1"
+    return conn.cursor().execute(query, (year, month)).fetchone() is not None
+
+def get_active_employees_for_month(conn, year, month):
+    """取得在指定年月仍在職的員工"""
+    month_first_day = f"{year}-{month:02d}-01"
+    _, last_day = pd.Timestamp(year, month, 1).days_in_month
+    month_last_day = f"{year}-{month:02d}-{last_day}"
+
+    query = """
+    SELECT id, name_ch FROM employee
+    WHERE (entry_date IS NOT NULL AND entry_date <= ?)
+      AND (resign_date IS NULL OR resign_date >= ?)
+    """
+    return pd.read_sql_query(query, conn, params=(month_last_day, month_first_day))
+
+def generate_initial_salary_records(conn, year, month):
+    """為所有在職員工產生薪資單主紀錄和所有明細的初始計算"""
+    employees_df = get_active_employees_for_month(conn, year, month)
+    if employees_df.empty:
+        return 0
+    
+    cursor = conn.cursor()
+    try:
+        cursor.execute("BEGIN TRANSACTION")
+        
+        for _, emp in employees_df.iterrows():
+            # 1. 建立薪資主紀錄 (salary)
+            sql_salary = "INSERT INTO salary (employee_id, year, month) VALUES (?, ?, ?)"
+            cursor.execute(sql_salary, (emp['id'], year, month))
+            salary_id = cursor.lastrowid
+
+            # 2. 計算並插入薪資明細 (salary_detail)
+            
+            # a. 取得底薪與眷屬數 (從 salary_base_history)
+            sql_base = "SELECT base_salary, dependents FROM salary_base_history WHERE employee_id = ? AND start_date <= date('now') ORDER BY start_date DESC LIMIT 1"
+            base_info = cursor.execute(sql_base, (emp['id'],)).fetchone()
+            base_salary = base_info[0] if base_info else 0
+            dependents = base_info[1] if base_info else 0
+
+            # b. 取得所有常態薪資項 (從 employee_salary_item)
+            sql_items = """
+            SELECT salary_item_id, amount FROM employee_salary_item
+            WHERE employee_id = ? AND start_date <= date('now')
+              AND (end_date IS NULL OR end_date >= date('now'))
+            """
+            recurring_items = cursor.execute(sql_items, (emp['id'],)).fetchall()
+            
+            # c. 取得勞健保級距與費用
+            salary_for_insurance = base_salary # 簡化：先用底薪判斷級距
+            
+            # 勞保
+            sql_labor = "SELECT employee_fee FROM insurance_grade WHERE type = 'labor' AND ? BETWEEN salary_min AND salary_max ORDER BY start_date DESC LIMIT 1"
+            labor_fee_tuple = cursor.execute(sql_labor, (salary_for_insurance,)).fetchone()
+            labor_fee = labor_fee_tuple[0] if labor_fee_tuple else 0
+            
+            # 健保 (需要考慮眷屬)
+            sql_health = "SELECT employee_fee FROM insurance_grade WHERE type = 'health' AND ? BETWEEN salary_min AND salary_max ORDER BY start_date DESC LIMIT 1"
+            health_fee_per_person = cursor.execute(sql_health, (salary_for_insurance,)).fetchone()
+            
+            # 健保費 = 個人保費 * (1 + 眷屬數(上限3))
+            num_insured = 1 + min(dependents, 3)
+            health_fee = (health_fee_per_person[0] * num_insured) if health_fee_per_person else 0
+
+            # d. 準備所有要插入的薪資明細
+            details_to_insert = []
+            # - 底薪 (假設 "底薪" 的 salary_item_id 為 1)
+            details_to_insert.append((salary_id, 1, base_salary))
+            # - 常態項目
+            for item_id, amount in recurring_items:
+                details_to_insert.append((salary_id, item_id, amount))
+            # - 勞保費 (假設 "勞保費" 的 salary_item_id 為 2)
+            details_to_insert.append((salary_id, 2, -labor_fee)) # 扣款為負數
+            # - 健保費 (假設 "健保費" 的 salary_item_id 為 3)
+            details_to_insert.append((salary_id, 3, -health_fee)) # 扣款為負數
+
+            # 3. 批次插入明細
+            sql_detail_insert = "INSERT INTO salary_detail (salary_id, salary_item_id, amount) VALUES (?, ?, ?)"
+            cursor.executemany(sql_detail_insert, details_to_insert)
+
+        conn.commit()
+        return len(employees_df)
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+def get_salary_report_for_editing(conn, year, month):
+    """取得指定年月的薪資報表，格式為 員工 vs 薪資項目，適合 data_editor"""
+    query = """
+    SELECT
+        s.id as salary_id,
+        e.name_ch as "員工姓名",
+        si.name as item_name,
+        sd.amount
+    FROM salary s
+    JOIN employee e ON s.employee_id = e.id
+    LEFT JOIN salary_detail sd ON s.id = sd.salary_id
+    LEFT JOIN salary_item si ON sd.salary_item_id = si.id
+    WHERE s.year = ? AND s.month = ?
+    ORDER BY e.name_ch, si.id
+    """
+    df = pd.read_sql_query(query, conn, params=(year, month))
+    if df.empty:
+        return pd.DataFrame()
+    
+    # 使用 pivot_table 將資料轉換為寬表格
+    pivot_df = df.pivot_table(index=['salary_id', '員工姓名'], columns='item_name', values='amount').reset_index()
+    return pivot_df
+
+def update_salary_detail_by_name(conn, salary_id, item_name, new_amount):
+    """根據 salary_id 和項目名稱來更新或插入金額"""
+    cursor = conn.cursor()
+    # 1. 取得 salary_item_id
+    item_id_tuple = cursor.execute("SELECT id FROM salary_item WHERE name = ?", (item_name,)).fetchone()
+    if not item_id_tuple:
+        raise ValueError(f"找不到名為 '{item_name}' 的薪資項目。")
+    item_id = item_id_tuple[0]
+
+    # 2. 檢查此明細是否存在
+    detail_id_tuple = cursor.execute("SELECT id FROM salary_detail WHERE salary_id = ? AND salary_item_id = ?", (salary_id, item_id)).fetchone()
+    
+    if detail_id_tuple:
+        # 更新
+        sql = "UPDATE salary_detail SET amount = ? WHERE id = ?"
+        cursor.execute(sql, (new_amount, detail_id_tuple[0]))
+    else:
+        # 新增
+        sql = "INSERT INTO salary_detail (salary_id, salary_item_id, amount) VALUES (?, ?, ?)"
+        cursor.execute(sql, (salary_id, item_id, new_amount))
+        
+    conn.commit()
+    return cursor.rowcount
+
+def check_salary_records_exist(conn, year, month):
+    """檢查指定年月的薪資主紀錄是否存在"""
+    query = "SELECT 1 FROM salary WHERE year = ? AND month = ? LIMIT 1"
+    return conn.cursor().execute(query, (year, month)).fetchone() is not None
+
+def get_active_employees_for_month(conn, year, month):
+    """取得在指定年月仍在職的員工"""
+    month_first_day = f"{year}-{month:02d}-01"
+    _, last_day = pd.Timestamp(year, month, 1).days_in_month
+    month_last_day = f"{year}-{month:02d}-{last_day}"
+
+    query = """
+    SELECT id, name_ch FROM employee
+    WHERE (entry_date IS NOT NULL AND entry_date <= ?)
+      AND (resign_date IS NULL OR resign_date >= ?)
+    """
+    return pd.read_sql_query(query, conn, params=(month_last_day, month_first_day))
+
+def generate_initial_salary_records(conn, year, month):
+    """
+    (V3 - 動態ID終極版) 為所有在職員工產生薪資單，並自動計算出勤與請假相關項目
+    """
+    employees_df = get_active_employees_for_month(conn, year, month)
+    if employees_df.empty:
+        return 0
+    
+    cursor = conn.cursor()
+    try:
+        cursor.execute("BEGIN TRANSACTION")
+        
+        # 1. 讀取薪資規則
+        rules_df = pd.read_sql_query("SELECT rule_key, value FROM payroll_rule", conn, index_col='rule_key')
+        rules = rules_df['value'].to_dict()
+        hourly_rate_divisor = float(rules.get('hourly_rate_divisor', 240))
+
+        # **核心修正：從資料庫動態讀取項目 ID**
+        items_df = pd.read_sql_query("SELECT id, name FROM salary_item", conn)
+        ITEM_IDS = pd.Series(items_df.id.values, index=items_df.name).to_dict()
+
+        # 檢查核心項目是否存在
+        required_items = ['底薪', '勞健保', '加班費', '遲到', '早退', '事假', '病假']
+        missing_items = [item for item in required_items if item not in ITEM_IDS]
+        if missing_items:
+            raise ValueError(f"系統缺少必要的薪資項目，請至「薪資項目管理」頁面新增：{', '.join(missing_items)}")
+        
+        for _, emp in employees_df.iterrows():
+            # 2. 建立薪資主紀錄 (salary)
+            sql_salary = "INSERT OR IGNORE INTO salary (employee_id, year, month) VALUES (?, ?, ?)"
+            cursor.execute(sql_salary, (emp['id'], year, month))
+            salary_id_tuple = cursor.execute("SELECT id FROM salary WHERE employee_id = ? AND year = ? AND month = ?", (emp['id'], year, month)).fetchone()
+            if not salary_id_tuple: continue
+            salary_id = salary_id_tuple[0]
+
+            # 3. 計算基礎薪資與時薪
+            sql_base = "SELECT base_salary, dependents FROM salary_base_history WHERE employee_id = ? AND start_date <= date('now') ORDER BY start_date DESC LIMIT 1"
+            base_info = cursor.execute(sql_base, (emp['id'],)).fetchone()
+            base_salary = base_info[0] if base_info else 0
+            dependents = base_info[1] if base_info else 0
+            hourly_rate = base_salary / hourly_rate_divisor if hourly_rate_divisor > 0 else 0
+
+            details_to_insert = []
+            # - 底薪
+            details_to_insert.append((salary_id, ITEM_IDS['base_salary'], base_salary))
+
+            # 4. 計算常態薪資項
+            sql_items = "SELECT salary_item_id, amount FROM employee_salary_item WHERE employee_id = ? AND start_date <= date('now') AND (end_date IS NULL OR end_date >= date('now'))"
+            recurring_items = cursor.execute(sql_items, (emp['id'],)).fetchall()
+            for item_id, amount in recurring_items:
+                details_to_insert.append((salary_id, item_id, amount))
+
+            # **核心修正：合併計算勞健保費**
+            salary_for_insurance = base_salary
+            sql_labor = "SELECT employee_fee FROM insurance_grade WHERE type = 'labor' AND ? BETWEEN salary_min AND salary_max ORDER BY start_date DESC LIMIT 1"
+            labor_fee = (cursor.execute(sql_labor, (salary_for_insurance,)).fetchone() or [0])[0]
+            
+            sql_health = "SELECT employee_fee FROM insurance_grade WHERE type = 'health' AND ? BETWEEN salary_min AND salary_max ORDER BY start_date DESC LIMIT 1"
+            health_fee_per_person = (cursor.execute(sql_health, (salary_for_insurance,)).fetchone() or [0])[0]
+            num_insured = 1 + min(dependents, 3)
+            health_fee = health_fee_per_person * num_insured
+            
+            total_insurance_fee = labor_fee + health_fee
+            details_to_insert.append((salary_id, ITEM_IDS['勞健保'], -total_insurance_fee)) # 扣款為負數
+
+            # **核心修正：更穩健地處理出勤分鐘數，避免 TypeError**
+            month_str = f"{year}-{month:02d}"
+            # 加班費
+            sql_overtime = "SELECT SUM(overtime1_minutes), SUM(overtime2_minutes), SUM(overtime3_minutes) FROM attendance WHERE employee_id = ? AND strftime('%Y-%m', date) = ?"
+            overtime_tuple = cursor.execute(sql_overtime, (emp['id'], month_str)).fetchone()
+            total_overtime_pay = 0
+            if overtime_tuple:
+                ot1_mins, ot2_mins, ot3_mins = (overtime_tuple[0] or 0, overtime_tuple[1] or 0, overtime_tuple[2] or 0)
+                total_overtime_pay += (ot1_mins / 60) * hourly_rate * float(rules.get('weekday_overtime_rate', 1.34))
+                total_overtime_pay += ((ot2_mins + ot3_mins) / 60) * hourly_rate * 1.67
+            details_to_insert.append((salary_id, ITEM_IDS['加班費'], round(total_overtime_pay)))
+            
+            # 遲到/早退
+            sql_lateness = "SELECT SUM(late_minutes), SUM(early_leave_minutes) FROM attendance WHERE employee_id = ? AND strftime('%Y-%m', date) = ?"
+            lateness_tuple = cursor.execute(sql_lateness, (emp['id'], month_str)).fetchone()
+            total_late_deduction, total_early_leave_deduction = 0, 0
+            if lateness_tuple:
+                late_mins, early_mins = (lateness_tuple[0] or 0, lateness_tuple[1] or 0)
+                total_late_deduction = late_mins * (hourly_rate / 60)
+                total_early_leave_deduction = early_mins * (hourly_rate / 60)
+            details_to_insert.append((salary_id, ITEM_IDS['遲到'], -round(total_late_deduction)))
+            details_to_insert.append((salary_id, ITEM_IDS['早退'], -round(total_early_leave_deduction)))
+            
+            # 請假
+            sql_leave = "SELECT leave_type, SUM(duration) FROM leave_record WHERE employee_id = ? AND strftime('%Y-%m', start_date) = ? GROUP BY leave_type"
+            leave_hours = cursor.execute(sql_leave, (emp['id'], month_str)).fetchall()
+            total_personal_leave_deduction, total_sick_leave_deduction = 0, 0
+            if leave_hours:
+                for leave_type, hours in leave_hours:
+                    if leave_type == '事假':
+                        total_personal_leave_deduction += hours * hourly_rate
+                    elif leave_type == '病假':
+                        total_sick_leave_deduction += (hours * hourly_rate * 0.5)
+            details_to_insert.append((salary_id, ITEM_IDS['事假'], -round(total_personal_leave_deduction)))
+            details_to_insert.append((salary_id, ITEM_IDS['病假'], -round(total_sick_leave_deduction)))
+
+            # 7. 批次插入所有明細
+            sql_detail_insert = "INSERT OR IGNORE INTO salary_detail (salary_id, salary_item_id, amount) VALUES (?, ?, ?)"
+            cursor.executemany(sql_detail_insert, details_to_insert)
+
+        conn.commit()
+        return len(employees_df)
+    except Exception as e:
+        conn.rollback()
+        raise e
