@@ -4,6 +4,7 @@ __pycache__/
 
 # Excel files
 *.xlsx
+*.xls
 
 # CSV files
 *.csv
