@@ -269,3 +269,148 @@ def delete_insurance_grade(conn, record_id):
     sql = "DELETE FROM insurance_grade WHERE id = ?"
     cursor.execute(sql, (record_id,))
     conn.commit()
+
+# --- 員工常態薪資項設定相關函式 (Employee Salary Item) ---
+
+def get_employee_salary_items(conn):
+    """取得所有員工的常態薪資項設定"""
+    query = """
+    SELECT
+        esi.id,
+        e.id as employee_id,
+        e.name_ch as '員工姓名',
+        si.id as salary_item_id,
+        si.name as '項目名稱',
+        si.type as '類型',
+        esi.amount as '金額',
+        esi.start_date as '生效日',
+        esi.end_date as '結束日',
+        esi.note as '備註'
+    FROM employee_salary_item esi
+    JOIN employee e ON esi.employee_id = e.id
+    JOIN salary_item si ON esi.salary_item_id = si.id
+    ORDER BY e.name_ch, si.name
+    """
+    return pd.read_sql_query(query, conn)
+
+def get_settings_grouped_by_amount(conn, salary_item_id):
+    """
+    根據薪資項目ID，查詢所有相關設定，並按金額分組。
+    返回一個字典，鍵是金額，值是擁有該金額設定的員工列表。
+    """
+    if not salary_item_id:
+        return {}
+    
+    query = """
+    SELECT
+        esi.amount,
+        e.id as employee_id,
+        e.name_ch
+    FROM employee_salary_item esi
+    JOIN employee e ON esi.employee_id = e.id
+    WHERE esi.salary_item_id = ?
+    ORDER BY esi.amount, e.name_ch
+    """
+    df = pd.read_sql_query(query, conn, params=(int(salary_item_id),))
+    
+    # 按金額分組
+    grouped_data = {}
+    if not df.empty:
+        for amount, group in df.groupby('amount'):
+            grouped_data[amount] = group[['employee_id', 'name_ch']].to_dict('records')
+            
+    return grouped_data
+
+
+def batch_add_employee_salary_items(conn, employee_ids, salary_item_id, amount, start_date, end_date, note):
+    """
+    批次為多位員工新增一筆常態薪資項。
+    此操作會先檢查並刪除這些員工在同一項目上的舊設定，再插入新設定。
+    """
+    cursor = conn.cursor()
+    try:
+        start_date_str = start_date.strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d') if end_date else None
+        
+        cursor.execute("BEGIN TRANSACTION")
+        
+        # 為了簡化，我們先刪除這些員工在此項目上的舊設定
+        placeholders = ','.join('?' for _ in employee_ids)
+        sql_delete = f"DELETE FROM employee_salary_item WHERE salary_item_id = ? AND employee_id IN ({placeholders})"
+        cursor.execute(sql_delete, [salary_item_id] + employee_ids)
+
+        # 批次插入新設定
+        sql_insert = """
+        INSERT INTO employee_salary_item
+        (employee_id, salary_item_id, amount, start_date, end_date, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """
+        data_tuples = [
+            (emp_id, salary_item_id, amount, start_date_str, end_date_str, note)
+            for emp_id in employee_ids
+        ]
+        cursor.executemany(sql_insert, data_tuples)
+        
+        conn.commit()
+        return len(data_tuples)
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    
+def batch_update_employee_salary_items(conn, employee_ids, salary_item_id, new_data):
+    """
+    批次為指定的多位員工，更新某個常態薪資項的設定。
+    """
+    cursor = conn.cursor()
+    try:
+        start_date_str = new_data['start_date'].strftime('%Y-%m-%d') if new_data['start_date'] else None
+        end_date_str = new_data['end_date'].strftime('%Y-%m-%d') if new_data['end_date'] else None
+        
+        cursor.execute("BEGIN TRANSACTION")
+        
+        placeholders = ','.join('?' for _ in employee_ids)
+        sql_update = f"""
+        UPDATE employee_salary_item SET
+        amount = ?, start_date = ?, end_date = ?, note = ?
+        WHERE salary_item_id = ? AND employee_id IN ({placeholders})
+        """
+        
+        # 準備參數
+        params = [new_data['amount'], start_date_str, end_date_str, new_data['note'], salary_item_id] + employee_ids
+        
+        cursor.execute(sql_update, params)
+        
+        conn.commit()
+        # 回傳受影響的行數
+        return cursor.rowcount
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+def update_employee_salary_item(conn, record_id, data):
+    """更新指定的單筆常態薪資項設定"""
+    cursor = conn.cursor()
+    sql = """
+    UPDATE employee_salary_item SET
+    amount = ?, start_date = ?, end_date = ?, note = ?
+    WHERE id = ?
+    """
+    start_date_str = data['start_date'].strftime('%Y-%m-%d') if data['start_date'] else None
+    end_date_str = data['end_date'].strftime('%Y-%m-%d') if data['end_date'] else None
+
+    cursor.execute(sql, (
+        data['amount'], start_date_str, end_date_str, data['note'],
+        record_id
+    ))
+    conn.commit()
+    return cursor.rowcount
+
+def delete_employee_salary_item(conn, record_id):
+    """刪除指定的單筆常態薪資項設定"""
+    cursor = conn.cursor()
+    sql = "DELETE FROM employee_salary_item WHERE id = ?"
+    cursor.execute(sql, (record_id,))
+    conn.commit()
+    return cursor.rowcount

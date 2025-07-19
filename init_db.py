@@ -160,6 +160,25 @@ def create_tables(conn):
     # 更新唯一索引，確保同一天、同類別的級距是唯一的
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_insurance_grade_date_type_grade ON insurance_grade (start_date, type, grade)")
 
+    # 員工常態薪資項設定
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS employee_salary_item (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER NOT NULL,
+        salary_item_id INTEGER NOT NULL,
+        amount INTEGER NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE, -- 結束日，可為空，表示持續有效
+        note TEXT,
+        FOREIGN KEY(employee_id) REFERENCES employee(id) ON DELETE CASCADE,
+        FOREIGN KEY(salary_item_id) REFERENCES salary_item(id) ON DELETE CASCADE
+    )
+    """)
+    # 建立索引以優化查詢
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_employee_salary_item_employee_id ON employee_salary_item (employee_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_employee_salary_item_salary_item_id ON employee_salary_item (salary_item_id)")
+
+
     conn.commit()
     print("資料表建立完成！")
 
