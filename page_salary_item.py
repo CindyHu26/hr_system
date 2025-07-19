@@ -2,12 +2,12 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from utils import (
+from utils_salary import (
     get_all_salary_items,
     add_salary_item,
     update_salary_item,
     delete_salary_item,
-    SALARY_ITEM_COLUMNS_MAP # 引用新加入的中文欄位對應
+    SALARY_ITEM_COLUMNS_MAP
 )
 
 def show_page(conn):

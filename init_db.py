@@ -146,6 +146,7 @@ def create_tables(conn):
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS insurance_grade (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        start_date DATE NOT NULL,        -- 新增適用起算日
         type TEXT NOT NULL,              -- 'labor' 或 'health'
         grade INTEGER NOT NULL,          -- 級距
         salary_min INTEGER NOT NULL,     -- 投保薪資下限
@@ -153,11 +154,11 @@ def create_tables(conn):
         employee_fee INTEGER,            -- 員工負擔費用
         employer_fee INTEGER,            -- 雇主負擔費用
         gov_fee INTEGER,                 -- 政府補助費用
-        note TEXT                        -- 備註，例如：適用日期
+        note TEXT                        -- 備註
     )
     """)
-    # 為 type 和 grade 建立唯一索引，防止重複資料
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_insurance_grade_type_grade ON insurance_grade (type, grade)")
+    # 更新唯一索引，確保同一天、同類別的級距是唯一的
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_insurance_grade_date_type_grade ON insurance_grade (start_date, type, grade)")
 
     conn.commit()
     print("資料表建立完成！")
