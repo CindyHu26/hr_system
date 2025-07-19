@@ -5,8 +5,7 @@ from datetime import datetime, date
 from utils import (
     get_all_employees,
 )
-
-from utils_salary import (
+from utils_salary_crud import (
     get_salary_base_history,
     add_salary_base_history,
     update_salary_base_history,

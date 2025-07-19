@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from utils_salary import (
+from utils_salary_crud import (
     get_all_salary_items,
     add_salary_item,
     update_salary_item,

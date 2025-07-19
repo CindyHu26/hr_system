@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 from utils import get_all_employees
-from utils_salary import (
+from utils_salary_crud import (
     get_all_salary_items,
     get_employee_salary_items,
     get_settings_grouped_by_amount,

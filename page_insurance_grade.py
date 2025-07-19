@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 from datetime import datetime, date
 import config
-from utils_salary import (
+from utils_insurance import (
     get_insurance_grades,
     batch_insert_insurance_grades,
     update_insurance_grade,

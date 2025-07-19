@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from utils_salary import (
+from utils_salary_calc import (
     calculate_salary_df,
     save_salary_df,
     get_previous_non_insured_names,
@@ -71,7 +71,7 @@ def show_page(conn):
             st.session_state.salary_draft_df = recalculated_draft
             
             st.markdown("##### 2. 預覽計算結果")
-            display_colored_dataframe(recalculated_draft, item_types)
+            display_html_table(recalculated_draft, item_types)
 
             c1_btn, c2_btn, _ = st.columns([1, 1, 3])
             if c1_btn.button("✅ 確認並儲存薪資單", type="primary"):
