@@ -22,7 +22,7 @@ PAGES = {
     "出勤紀錄管理 (CRUD)": show_attendance_crud_page,
     "請假與異常分析": show_analysis_page,
     "薪資項目管理": show_salary_item_page,
-    "員工薪資異動管理": show_salary_base_history_page,
+    "員工底薪／眷屬異動管理": show_salary_base_history_page,
     "勞健保級距管理": show_insurance_grade_page,
     "員工常態薪資項設定": show_allowance_setting_page,
     "薪資單產生與管理":show_salary_calculation_page,
