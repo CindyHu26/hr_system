@@ -546,72 +546,6 @@ def generate_leave_attendance_comparison(leave_df, attendance_df, emp_df, year, 
     merged_df.rename(columns=final_cols, inplace=True)
     return merged_df[list(final_cols.values())].fillna('-').sort_values(by=['日期', '員工姓名'])
 
-# --- 異常比對與缺勤彙總 ---
-def find_absence(attendance_df, leave_df, emp_df, year, month, count_mode=False):
-    """
-    修正版：在合併前，強制統一 employee_id 的資料類型，以確保比對正確。
-    """
-    name_map = dict(zip(emp_df['id'], emp_df['name_ch']))
-    holidays, workdays = fetch_taiwan_calendar(year)
-    
-    try:
-        _, last_day = monthrange(year, month)
-    except ValueError:
-        st.error(f"輸入的年份 ({year}) 或月份 ({month}) 不正確。")
-        return pd.DataFrame()
-
-    all_dates = [datetime(year, month, d).date() for d in range(1, last_day + 1)]
-    work_dates = [d for d in all_dates if (d.weekday() < 5 and d not in holidays) or d in workdays]
-    
-    if not work_dates:
-        st.warning(f"{year} 年 {month} 月沒有應出勤的工作日。")
-        return pd.DataFrame()
-
-    all_index = pd.MultiIndex.from_product([emp_df['id'].unique(), work_dates], names=['employee_id', 'date'])
-    df_all = pd.DataFrame(index=all_index).reset_index()
-    
-    # 確保日期格式一致
-    attendance_df['date'] = pd.to_datetime(attendance_df['date']).dt.date
-    df_all['date'] = pd.to_datetime(df_all['date']).dt.date
-    
-    # --- *** 這是關鍵的修正點 *** ---
-    # 在合併前，強制將兩邊的 employee_id 都轉換為整數 (int) 類型
-    df_all['employee_id'] = df_all['employee_id'].astype(int)
-    attendance_df['employee_id'] = pd.to_numeric(attendance_df['employee_id'], errors='coerce').fillna(0).astype(int)
-    
-    # 進行左合併，找出應出勤但可能沒有打卡紀錄的員工
-    merged = pd.merge(df_all, attendance_df[['employee_id', 'date', 'checkin_time']], on=['employee_id', 'date'], how='left')
-    
-    # 檢查員工當天是否已請假
-    def is_on_leave(row):
-        emp_name = name_map.get(row['employee_id'], '')
-        if not emp_name: return False
-        
-        # 篩選出該員工的請假紀錄，並確保 leave_df 中的日期也是 date 物件
-        leave_df['Start Date'] = pd.to_datetime(leave_df['Start Date']).dt.date
-        leave_df['End Date'] = pd.to_datetime(leave_df['End Date']).dt.date
-        
-        sub = leave_df[leave_df['Employee Name'] == emp_name]
-        for _, lrow in sub.iterrows():
-            if pd.notna(lrow['Start Date']) and pd.notna(lrow['End Date']):
-                if lrow['Start Date'] <= row['date'] <= lrow['End Date']:
-                    return True
-        return False
-        
-    merged['on_leave'] = merged.apply(is_on_leave, axis=1)
-    
-    # 如果沒有打卡紀錄 (checkin_time 是 NaT/None) 且當天沒有請假，則標記為「缺勤」
-    merged['異常'] = merged.apply(lambda r: "缺勤" if pd.isna(r['checkin_time']) and not r['on_leave'] else "", axis=1)
-    merged['員工姓名'] = merged['employee_id'].map(name_map)
-    
-    absent_df = merged[merged['異常'] == "缺勤"]
-    
-    if count_mode:
-        summary = absent_df.groupby('員工姓名')['date'].count().reset_index().rename(columns={'date': '缺勤天數'})
-        return summary
-        
-    return absent_df[['員工姓名', 'date', '異常']]
-
 # --- 出勤與請假紀錄 CRUD ---
 def get_attendance_records(conn, year, month):
     query = """
@@ -666,3 +600,97 @@ def delete_record_by_id(conn, table_name, record_id):
     cursor = conn.cursor()
     cursor.execute(f'DELETE FROM {table_name} WHERE id = ?', (record_id,))
     conn.commit()
+
+# ******** 核心修改 1：請在此處加入新的查詢函式 ********
+def get_leave_df_from_db(conn, year, month):
+    """
+    從資料庫讀取指定年月的請假紀錄，並整理成分析所需的 DataFrame 格式。
+    """
+    month_str = f"{year}-{month:02d}"
+    query = """
+    SELECT
+        e.name_ch AS "Employee Name",
+        lr.leave_type AS "Type of Leave",
+        lr.start_date AS "Start Date",
+        lr.end_date AS "End Date",
+        lr.duration AS "Duration",
+        lr.status AS "Status"
+    FROM leave_record lr
+    JOIN employee e ON lr.employee_id = e.id
+    WHERE strftime('%Y-%m', lr.start_date) = ?
+      AND lr.status = '已通過'
+    """
+    # parse_dates 會自動將日期欄位轉換為 datetime 物件
+    df = pd.read_sql_query(query, conn, params=(month_str,), parse_dates=["Start Date", "End Date"])
+    
+    # 為了與舊的分析函式兼容，我們手動新增 'start_has_time' 欄位
+    # 因為資料庫儲存的是精確時間，所以這個值永遠是 True
+    if not df.empty:
+        df['start_has_time'] = True
+    
+    return df
+
+# --- 請假紀錄相關函式 (Leave Record) ---
+def batch_insert_leave_records(conn, leave_df):
+    """
+    (V2 - 已可處理編輯後的 DataFrame)
+    批次將 DataFrame 中的請假紀錄匯入資料庫。
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute("BEGIN TRANSACTION")
+        
+        df_to_insert = leave_df.copy()
+        
+        # 確保必要的欄位存在
+        required_cols = ['Employee Name', 'Request ID', 'Type of Leave', 'Start Date', 'End Date', 'Duration', 'Status']
+        for col in required_cols:
+            if col not in df_to_insert.columns:
+                raise ValueError(f"上傳的資料中缺少必要的欄位: {col}")
+
+        # 建立 employee_id
+        emp_map = pd.read_sql_query("SELECT name_ch, id FROM employee", conn)
+        emp_dict = dict(zip(emp_map['name_ch'], emp_map['id']))
+        df_to_insert['employee_id'] = df_to_insert['Employee Name'].map(emp_dict)
+
+        df_to_insert.dropna(subset=['employee_id'], inplace=True)
+        df_to_insert['employee_id'] = df_to_insert['employee_id'].astype(int)
+
+        # 準備插入的元組列表
+        sql = """
+        INSERT INTO leave_record (
+            employee_id, request_id, leave_type, start_date, end_date,
+            duration, reason, status, approver, submit_date, note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(request_id) DO UPDATE SET
+            leave_type=excluded.leave_type,
+            start_date=excluded.start_date,
+            end_date=excluded.end_date,
+            duration=excluded.duration,
+            status=excluded.status,
+            note='UPDATED_FROM_ANALYSIS'
+        """
+        
+        data_tuples = []
+        for _, row in df_to_insert.iterrows():
+            data_tuples.append((
+                row['employee_id'],
+                row['Request ID'],
+                row['Type of Leave'],
+                pd.to_datetime(row['Start Date']).strftime('%Y-%m-%d %H:%M:%S'),
+                pd.to_datetime(row['End Date']).strftime('%Y-%m-%d %H:%M:%S'),
+                row['Duration'],
+                row.get('Details'),
+                row.get('Status'),
+                row.get('Approver Name'),
+                pd.to_datetime(row.get('Date Submitted')).strftime('%Y-%m-%d') if pd.notna(row.get('Date Submitted')) else None,
+                "GSHEET_IMPORT"
+            ))
+
+        cursor.executemany(sql, data_tuples)
+        conn.commit()
+        return len(data_tuples)
+        
+    except Exception as e:
+        conn.rollback()
+        raise e

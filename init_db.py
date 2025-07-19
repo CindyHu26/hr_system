@@ -79,7 +79,7 @@ def create_tables(conn):
     CREATE TABLE IF NOT EXISTS leave_record (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER NOT NULL,
-        request_id TEXT,
+        request_id TEXT UNIQUE,
         leave_type TEXT NOT NULL,
         start_date DATE NOT NULL,
         end_date DATE NOT NULL,

@@ -27,11 +27,9 @@ SALARY_BASE_HISTORY_COLUMNS_MAP = {
 # --- 薪資項目相關函式 (Salary Item) ---
 
 def get_all_salary_items(conn, active_only=False):
-    """取得所有薪資項目"""
-    query = "SELECT * FROM salary_item"
+    query = "SELECT * FROM salary_item ORDER BY type, id"
     if active_only:
-        query += " WHERE is_active = 1"
-    query += " ORDER BY type, id"
+        query = "SELECT * FROM salary_item WHERE is_active = 1 ORDER BY type, id"
     return pd.read_sql_query(query, conn)
 
 def add_salary_item(conn, data):
@@ -59,15 +57,11 @@ def delete_salary_item(conn, item_id):
 
 
 # --- 員工底薪/眷屬異動歷史相關函式 (Salary Base History) ---
-
 def get_salary_base_history(conn):
-    """取得所有員工的底薪/眷屬異動歷史"""
     query = """
-    SELECT
-        sh.id, sh.employee_id, e.name_ch, sh.base_salary,
-        sh.dependents, sh.start_date, sh.end_date, sh.note
-    FROM salary_base_history sh
-    JOIN employee e ON sh.employee_id = e.id
+    SELECT sh.id, sh.employee_id, e.name_ch, sh.base_salary,
+           sh.dependents, sh.start_date, sh.end_date, sh.note
+    FROM salary_base_history sh JOIN employee e ON sh.employee_id = e.id
     ORDER BY e.name_ch, sh.start_date DESC
     """
     return pd.read_sql_query(query, conn)
@@ -552,17 +546,15 @@ def update_salary_detail_by_name(conn, salary_id, item_name, new_amount):
     conn.commit()
     return cursor.rowcount
 
+# --- Salary Calculation Core Functions ---
 def check_salary_records_exist(conn, year, month):
-    """檢查指定年月的薪資主紀錄是否存在"""
     query = "SELECT 1 FROM salary WHERE year = ? AND month = ? LIMIT 1"
     return conn.cursor().execute(query, (year, month)).fetchone() is not None
 
 def get_active_employees_for_month(conn, year, month):
-    """取得在指定年月仍在職的員工"""
     month_first_day = f"{year}-{month:02d}-01"
     _, last_day = pd.Timestamp(year, month, 1).days_in_month
     month_last_day = f"{year}-{month:02d}-{last_day}"
-
     query = """
     SELECT id, name_ch FROM employee
     WHERE (entry_date IS NOT NULL AND entry_date <= ?)
@@ -571,9 +563,6 @@ def get_active_employees_for_month(conn, year, month):
     return pd.read_sql_query(query, conn, params=(month_last_day, month_first_day))
 
 def generate_initial_salary_records(conn, year, month):
-    """
-    (V3 - 動態ID終極版) 為所有在職員工產生薪資單，並自動計算出勤與請假相關項目
-    """
     employees_df = get_active_employees_for_month(conn, year, month)
     if employees_df.empty:
         return 0
@@ -582,96 +571,85 @@ def generate_initial_salary_records(conn, year, month):
     try:
         cursor.execute("BEGIN TRANSACTION")
         
-        # 1. 讀取薪資規則
         rules_df = pd.read_sql_query("SELECT rule_key, value FROM payroll_rule", conn, index_col='rule_key')
         rules = rules_df['value'].to_dict()
         hourly_rate_divisor = float(rules.get('hourly_rate_divisor', 240))
 
-        # **核心修正：從資料庫動態讀取項目 ID**
         items_df = pd.read_sql_query("SELECT id, name FROM salary_item", conn)
         ITEM_IDS = pd.Series(items_df.id.values, index=items_df.name).to_dict()
-
-        # 檢查核心項目是否存在
+        
         required_items = ['底薪', '勞健保', '加班費', '遲到', '早退', '事假', '病假']
         missing_items = [item for item in required_items if item not in ITEM_IDS]
         if missing_items:
-            raise ValueError(f"系統缺少必要的薪資項目，請至「薪資項目管理」頁面新增：{', '.join(missing_items)}")
-        
+            raise ValueError(f"System is missing required salary items. Please add them in 'Salary Item Management': {', '.join(missing_items)}")
+
         for _, emp in employees_df.iterrows():
-            # 2. 建立薪資主紀錄 (salary)
             sql_salary = "INSERT OR IGNORE INTO salary (employee_id, year, month) VALUES (?, ?, ?)"
             cursor.execute(sql_salary, (emp['id'], year, month))
             salary_id_tuple = cursor.execute("SELECT id FROM salary WHERE employee_id = ? AND year = ? AND month = ?", (emp['id'], year, month)).fetchone()
             if not salary_id_tuple: continue
             salary_id = salary_id_tuple[0]
 
-            # 3. 計算基礎薪資與時薪
-            sql_base = "SELECT base_salary, dependents FROM salary_base_history WHERE employee_id = ? AND start_date <= date('now') ORDER BY start_date DESC LIMIT 1"
+            sql_base = "SELECT base_salary, dependents FROM salary_base_history WHERE employee_id = ? AND start_date <= date('now', 'localtime') ORDER BY start_date DESC LIMIT 1"
             base_info = cursor.execute(sql_base, (emp['id'],)).fetchone()
             base_salary = base_info[0] if base_info else 0
             dependents = base_info[1] if base_info else 0
             hourly_rate = base_salary / hourly_rate_divisor if hourly_rate_divisor > 0 else 0
 
             details_to_insert = []
-            # - 底薪
-            details_to_insert.append((salary_id, ITEM_IDS['base_salary'], base_salary))
+            details_to_insert.append((salary_id, ITEM_IDS['底薪'], base_salary))
 
-            # 4. 計算常態薪資項
-            sql_items = "SELECT salary_item_id, amount FROM employee_salary_item WHERE employee_id = ? AND start_date <= date('now') AND (end_date IS NULL OR end_date >= date('now'))"
+            sql_items = "SELECT salary_item_id, amount FROM employee_salary_item WHERE employee_id = ? AND start_date <= date('now', 'localtime') AND (end_date IS NULL OR end_date >= date('now', 'localtime'))"
             recurring_items = cursor.execute(sql_items, (emp['id'],)).fetchall()
             for item_id, amount in recurring_items:
                 details_to_insert.append((salary_id, item_id, amount))
 
-            # **核心修正：合併計算勞健保費**
             salary_for_insurance = base_salary
-            sql_labor = "SELECT employee_fee FROM insurance_grade WHERE type = 'labor' AND ? BETWEEN salary_min AND salary_max ORDER BY start_date DESC LIMIT 1"
+            sql_labor = "SELECT employee_fee FROM insurance_grade WHERE type = 'labor' AND ? BETWEEN salary_min AND salary_max AND start_date <= date('now', 'localtime') ORDER BY start_date DESC LIMIT 1"
             labor_fee = (cursor.execute(sql_labor, (salary_for_insurance,)).fetchone() or [0])[0]
             
-            sql_health = "SELECT employee_fee FROM insurance_grade WHERE type = 'health' AND ? BETWEEN salary_min AND salary_max ORDER BY start_date DESC LIMIT 1"
+            sql_health = "SELECT employee_fee FROM insurance_grade WHERE type = 'health' AND ? BETWEEN salary_min AND salary_max AND start_date <= date('now', 'localtime') ORDER BY start_date DESC LIMIT 1"
             health_fee_per_person = (cursor.execute(sql_health, (salary_for_insurance,)).fetchone() or [0])[0]
             num_insured = 1 + min(dependents, 3)
             health_fee = health_fee_per_person * num_insured
             
             total_insurance_fee = labor_fee + health_fee
-            details_to_insert.append((salary_id, ITEM_IDS['勞健保'], -total_insurance_fee)) # 扣款為負數
+            details_to_insert.append((salary_id, ITEM_IDS['勞健保'], -total_insurance_fee))
 
-            # **核心修正：更穩健地處理出勤分鐘數，避免 TypeError**
             month_str = f"{year}-{month:02d}"
-            # 加班費
+            
+            # **CORE FIX: Robustly handle tuple unpacking**
             sql_overtime = "SELECT SUM(overtime1_minutes), SUM(overtime2_minutes), SUM(overtime3_minutes) FROM attendance WHERE employee_id = ? AND strftime('%Y-%m', date) = ?"
             overtime_tuple = cursor.execute(sql_overtime, (emp['id'], month_str)).fetchone()
             total_overtime_pay = 0
             if overtime_tuple:
-                ot1_mins, ot2_mins, ot3_mins = (overtime_tuple[0] or 0, overtime_tuple[1] or 0, overtime_tuple[2] or 0)
-                total_overtime_pay += (ot1_mins / 60) * hourly_rate * float(rules.get('weekday_overtime_rate', 1.34))
-                total_overtime_pay += ((ot2_mins + ot3_mins) / 60) * hourly_rate * 1.67
+                ot1, ot2, ot3 = overtime_tuple
+                total_overtime_pay += ((ot1 or 0) / 60) * hourly_rate * float(rules.get('weekday_overtime_rate', 1.34))
+                total_overtime_pay += (((ot2 or 0) + (ot3 or 0)) / 60) * hourly_rate * 1.67
             details_to_insert.append((salary_id, ITEM_IDS['加班費'], round(total_overtime_pay)))
             
-            # 遲到/早退
             sql_lateness = "SELECT SUM(late_minutes), SUM(early_leave_minutes) FROM attendance WHERE employee_id = ? AND strftime('%Y-%m', date) = ?"
             lateness_tuple = cursor.execute(sql_lateness, (emp['id'], month_str)).fetchone()
             total_late_deduction, total_early_leave_deduction = 0, 0
             if lateness_tuple:
-                late_mins, early_mins = (lateness_tuple[0] or 0, lateness_tuple[1] or 0)
-                total_late_deduction = late_mins * (hourly_rate / 60)
-                total_early_leave_deduction = early_mins * (hourly_rate / 60)
+                late_mins, early_mins = lateness_tuple
+                total_late_deduction = (late_mins or 0) * (hourly_rate / 60)
+                total_early_leave_deduction = (early_mins or 0) * (hourly_rate / 60)
             details_to_insert.append((salary_id, ITEM_IDS['遲到'], -round(total_late_deduction)))
             details_to_insert.append((salary_id, ITEM_IDS['早退'], -round(total_early_leave_deduction)))
             
-            # 請假
-            sql_leave = "SELECT leave_type, SUM(duration) FROM leave_record WHERE employee_id = ? AND strftime('%Y-%m', start_date) = ? GROUP BY leave_type"
+            sql_leave = "SELECT leave_type, SUM(duration) FROM leave_record WHERE employee_id = ? AND strftime('%Y-%m', start_date) = ? AND status = '已通過' GROUP BY leave_type"
             leave_hours = cursor.execute(sql_leave, (emp['id'], month_str)).fetchall()
             total_personal_leave_deduction, total_sick_leave_deduction = 0, 0
             if leave_hours:
                 for leave_type, hours in leave_hours:
                     if leave_type == '事假':
-                        total_personal_leave_deduction += hours * hourly_rate
+                        total_personal_leave_deduction += (hours or 0) * hourly_rate
                     elif leave_type == '病假':
-                        total_sick_leave_deduction += (hours * hourly_rate * 0.5)
+                        total_sick_leave_deduction += ((hours or 0) * hourly_rate * 0.5)
             details_to_insert.append((salary_id, ITEM_IDS['事假'], -round(total_personal_leave_deduction)))
             details_to_insert.append((salary_id, ITEM_IDS['病假'], -round(total_sick_leave_deduction)))
 
-            # 7. 批次插入所有明細
             sql_detail_insert = "INSERT OR IGNORE INTO salary_detail (salary_id, salary_item_id, amount) VALUES (?, ?, ?)"
             cursor.executemany(sql_detail_insert, details_to_insert)
 
@@ -680,3 +658,41 @@ def generate_initial_salary_records(conn, year, month):
     except Exception as e:
         conn.rollback()
         raise e
+
+def get_salary_report_for_editing(conn, year, month):
+    query = """
+    SELECT
+        s.id as salary_id,
+        e.name_ch as "員工姓名",
+        si.name as item_name,
+        sd.amount
+    FROM salary s
+    JOIN employee e ON s.employee_id = e.id
+    LEFT JOIN salary_detail sd ON s.id = sd.salary_id
+    LEFT JOIN salary_item si ON sd.salary_item_id = si.id
+    WHERE s.year = ? AND s.month = ?
+    ORDER BY e.name_ch, si.id
+    """
+    df = pd.read_sql_query(query, conn, params=(year, month))
+    if df.empty:
+        return pd.DataFrame()
+    
+    pivot_df = df.pivot_table(index=['salary_id', '員工姓名'], columns='item_name', values='amount').reset_index()
+    return pivot_df
+
+def update_salary_detail_by_name(conn, salary_id, item_name, new_amount):
+    cursor = conn.cursor()
+    item_id_tuple = cursor.execute("SELECT id FROM salary_item WHERE name = ?", (item_name,)).fetchone()
+    if not item_id_tuple:
+        raise ValueError(f"Could not find salary item named '{item_name}'.")
+    item_id = item_id_tuple[0]
+    
+    detail_id_tuple = cursor.execute("SELECT id FROM salary_detail WHERE salary_id = ? AND salary_item_id = ?", (salary_id, item_id)).fetchone()
+    if detail_id_tuple:
+        sql = "UPDATE salary_detail SET amount = ? WHERE id = ?"
+        cursor.execute(sql, (new_amount, detail_id_tuple[0]))
+    else:
+        sql = "INSERT INTO salary_detail (salary_id, salary_item_id, amount) VALUES (?, ?, ?)"
+        cursor.execute(sql, (salary_id, item_id, new_amount))
+    conn.commit()
+    return cursor.rowcount
