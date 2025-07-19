@@ -2,8 +2,8 @@
 import streamlit as st
 import pandas as pd
 import requests
-import io
 from datetime import datetime, date
+import config
 from utils_salary import (
     get_insurance_grades,
     batch_insert_insurance_grades,
@@ -58,7 +58,7 @@ def show_page(conn):
         # ******** 核心修正 1 ********
         labor_url = st.text_input(
             "勞保局保費分攤表網址", 
-            value="https://www.bli.gov.tw/0011588.html",
+            value=config.LABOR_INSURANCE_URL,
             key="labor_url_input"  # 加上唯一的 key
         )
         st.markdown(f"請從 [勞保局網站]({labor_url}) 下載適用於 **{start_date}** 之後的 Excel 檔案 (.xls)，並直接上傳。")
@@ -87,7 +87,7 @@ def show_page(conn):
             # ******** 核心修正 2 ********
             health_url = st.text_input(
                 "健保署保費負擔金額表網址", 
-                value="https://www.nhi.gov.tw/ch/cp-17545-f87bd-2576-1.html",
+                value=config.HEALTH_INSURANCE_URL,
                 key="health_url_input" # 加上唯一的 key
             )
             if st.button("🔗 解析網址並預覽"):

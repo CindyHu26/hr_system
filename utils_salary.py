@@ -2,6 +2,7 @@
 import pandas as pd
 import io
 from datetime import datetime
+import config
 
 # --- 常數定義 ---
 SALARY_ITEM_COLUMNS_MAP = {
@@ -131,54 +132,106 @@ def get_insurance_grades(conn):
     """取得所有勞健保級距資料"""
     return pd.read_sql_query("SELECT * FROM insurance_grade ORDER BY start_date DESC, type, grade", conn)
 
+# --- 勞健保級距相關函式 (Insurance Grade) ---
 def parse_labor_insurance_excel(file_obj):
-    """從官方 Excel 檔案解析勞保級距"""
+    """
+    (V11 - 加入去重機制) 根據使用者提供的精準行號和欄位邏輯，解析官方 Excel 檔案
+    """
     try:
         df = pd.read_excel(file_obj, header=None, engine='xlrd')
-        grade_row_data, salary_row_data, fee_row_data = df.iloc[36], df.iloc[37], df.iloc[68]
+
+        # 定位資料所在的精準行號 (iloc 是 0-based)
+        grade_row_data = df.iloc[36]
+        salary_row_data = df.iloc[37]
+        fee_row_data = df.iloc[68]
+        
+        # 定位「全時勞工」的起始「欄」，關鍵是找到 "第1級"
         start_col_index = -1
         for i, grade_text in enumerate(grade_row_data):
             if isinstance(grade_text, str) and "第1級" in grade_text:
-                start_col_index = i; break
-        if start_col_index == -1: raise ValueError("在第37列中找不到 '第1級'")
+                start_col_index = i
+                break
+        if start_col_index == -1:
+            raise ValueError("在第37列中找不到 '第1級'，無法定位全時勞工級距表。")
+
+        # 組合資料
         records = []
         for i in range(start_col_index, len(salary_row_data)):
-            salary, grade_text = salary_row_data.get(i), grade_row_data.get(i)
+            salary = salary_row_data.get(i)
+            grade_text = grade_row_data.get(i)
+            
             if pd.notna(salary) and isinstance(salary, (int, float)) and isinstance(grade_text, str):
                 try:
+                    grade = int(''.join(filter(str.isdigit, grade_text)))
+                    employee_fee = fee_row_data.get(i)
+                    employer_fee = fee_row_data.get(i + 1)
                     records.append({
-                        'grade': int(''.join(filter(str.isdigit, grade_text))),
+                        'grade': grade,
                         'salary_max': salary,
-                        'employee_fee': fee_row_data.get(i),
-                        'employer_fee': fee_row_data.get(i + 1),
+                        'employee_fee': employee_fee,
+                        'employer_fee': employer_fee,
                     })
-                except (ValueError, TypeError): continue
-        if not records: raise ValueError("無法從指定的行號中提取有效的級距資料")
-        df_final = pd.DataFrame(records).dropna(subset=['grade', 'salary_max']).drop_duplicates(subset=['grade'], keep='first')
+                except (ValueError, TypeError):
+                    continue # 如果無法轉換為數字，則跳過此欄
+
+        if not records:
+            raise ValueError("無法從指定的行號中提取有效的級距資料。請確認檔案格式未變。")
+
+        df_final = pd.DataFrame(records)
+        df_final.dropna(subset=['grade', 'salary_max'], inplace=True)
+        
+        # **核心修正：加入去重保險機制**
+        # 根據 'grade' 欄位去除重複項，保留第一個出現的
+        df_final.drop_duplicates(subset=['grade'], keep='first', inplace=True)
+        
+        # 計算 salary_min
         df_final['salary_min'] = df_final['salary_max'].shift(1).fillna(0) + 1
         df_final.loc[df_final.index[0], 'salary_min'] = 0
+        
         return df_final[['grade', 'salary_min', 'salary_max', 'employee_fee', 'employer_fee']]
+
     except Exception as e:
         raise ValueError(f"解析勞保 Excel 檔案時發生錯誤: {e}")
 
+
 def parse_insurance_html_table(html_content):
-    """從 HTML 文本中解析健保級距表"""
+    """(V5版 - 加入去重機制) 從 HTML 文本中解析健保級距表"""
     try:
         tables = pd.read_html(io.StringIO(html_content))
         target_df = next((df for df in tables if '月投保金額' in ''.join(map(str, df.columns))), None)
-        if target_df is None: raise ValueError("在 HTML 中找不到包含 '月投保金額' 的表格")
+        if target_df is None:
+            raise ValueError("在 HTML 中找不到包含 '月投保金額' 的表格。")
+
         df = target_df.copy()
         df.columns = ['_'.join(map(str, col)).strip() for col in df.columns.values]
         df.ffill(inplace=True)
-        rename_map = {df.columns[0]: 'grade', df.columns[1]: 'salary_max', df.columns[2]: 'employee_fee', df.columns[6]: 'employer_fee', df.columns[7]: 'gov_fee'}
+
+        rename_map = {
+            df.columns[0]: 'grade',
+            df.columns[1]: 'salary_max',
+            df.columns[2]: 'employee_fee',
+            df.columns[6]: 'employer_fee',
+            df.columns[7]: 'gov_fee'
+        }
         df.rename(columns=rename_map, inplace=True)
-        for col in ['grade', 'salary_max', 'employee_fee', 'employer_fee', 'gov_fee']:
+        
+        cols_to_numeric = ['grade', 'salary_max', 'employee_fee', 'employer_fee', 'gov_fee']
+        for col in cols_to_numeric:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[\s,元$]', '', regex=True), errors='coerce')
-        df.dropna(subset=['grade', 'salary_max'], inplace=True).drop_duplicates(subset=['grade'], keep='first', inplace=True)
+                df[col] = df[col].astype(str).str.replace(r'[\s,元$]', '', regex=True)
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df.dropna(subset=['grade', 'salary_max'], inplace=True)
+        
+        # **核心修正：加入去重保險機制**
+        df.drop_duplicates(subset=['grade'], keep='first', inplace=True)
+        
         df['salary_min'] = df['salary_max'].shift(1).fillna(0) + 1
         df.loc[df.index[0], 'salary_min'] = 0
-        return df[[col for col in ['grade', 'salary_min', 'salary_max', 'employee_fee', 'employer_fee', 'gov_fee'] if col in df.columns]]
+        
+        final_cols = ['grade', 'salary_min', 'salary_max', 'employee_fee', 'employer_fee', 'gov_fee']
+        return df[[col for col in final_cols if col in df.columns]]
+
     except Exception as e:
         raise ValueError(f"解析 HTML 時發生錯誤: {e}")
 
@@ -303,14 +356,16 @@ def calculate_salary_df(conn, year, month, non_insured_names: list = None):
     """薪資試算引擎: 純計算，不寫入資料庫，返回一個格式化的 DataFrame"""
     if non_insured_names is None: non_insured_names = []
     
-    WITHHOLDING_TAX_RATE, WITHHOLDING_TAX_THRESHOLD = 0.05, 88501
-    NHI_SUPPLEMENT_RATE, NHI_SUPPLEMENT_THRESHOLD = 0.0211, 28590
-
+    # [修改] 從 config 模組讀取設定值，而不是寫死
+    # WITHHOLDING_TAX_RATE, WITHHOLDING_TAX_THRESHOLD = 0.05, 88501 # 舊的寫法
+    # NHI_SUPPLEMENT_RATE, NHI_SUPPLEMENT_THRESHOLD = 0.0211, 28590 # 舊的寫法
+    
     employees_df = get_active_employees_for_month(conn, year, month)
     if employees_df.empty: return pd.DataFrame(), {}
     
     item_types = get_item_types(conn)
-    all_salary_data, hourly_rate_divisor = [], 240.0
+    # [修改] 從 config 讀取時薪除數
+    all_salary_data, hourly_rate_divisor = [], config.HOURLY_RATE_DIVISOR
 
     for _, emp in employees_df.iterrows():
         emp_id, emp_name = emp['id'], emp['name_ch']
@@ -347,10 +402,13 @@ def calculate_salary_df(conn, year, month, non_insured_names: list = None):
 
         total_earnings = sum(v for k, v in details.items() if item_types.get(k) == 'earning')
         supplement_base = total_earnings - details.get('底薪', 0)
-        if supplement_base >= NHI_SUPPLEMENT_THRESHOLD:
-            details['二代健保補充費'] = - (supplement_base * NHI_SUPPLEMENT_RATE)
-        if total_earnings >= WITHHOLDING_TAX_THRESHOLD:
-            details['稅款'] = - (total_earnings * WITHHOLDING_TAX_RATE)
+        
+        # [修改] 使用 config 的設定值
+        if supplement_base >= config.NHI_SUPPLEMENT_THRESHOLD:
+            details['二代健保補充費'] = - (supplement_base * config.NHI_SUPPLEMENT_RATE)
+        # [修改] 使用 config 的設定值
+        if total_earnings >= config.WITHHOLDING_TAX_THRESHOLD:
+            details['稅款'] = - (total_earnings * config.WITHHOLDING_TAX_RATE)
 
         all_salary_data.append({'員工姓名': emp_name, **details})
 
