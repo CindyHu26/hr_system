@@ -1,7 +1,7 @@
 # page_salary_base_history.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 from utils import (
     get_all_employees,
 )
@@ -20,6 +20,40 @@ def show_page(conn):
     """
     st.header("員工底薪／眷屬異動管理")
     st.info("管理每位員工的歷次調薪、眷屬數量變更紀錄。所有異動都應在此留下歷史軌跡。")
+
+    # ---【新功能】一鍵更新基本工資 ---
+    st.write("---")
+    st.subheader("一鍵更新基本工資")
+    
+    # 根據搜尋結果，設定 2025 年基本工資
+    LEGAL_MINIMUM_WAGE_2025 = 28590
+    
+    c1, c2 = st.columns([1, 1])
+    new_wage = c1.number_input(
+        "設定新的基本工資", 
+        min_value=0, 
+        value=LEGAL_MINIMUM_WAGE_2025,
+        help=f"根據勞動部公告，2025年基本工資為 NT$ {LEGAL_MINIMUM_WAGE_2025}"
+    )
+    effective_date = c2.date_input("設定新制生效日", value=date(2025, 1, 1))
+
+    if st.button("Step 1: 預覽將被更新的員工"):
+        with st.spinner("正在篩選底薪低於新標準的員工..."):
+            preview_df = get_employees_below_minimum_wage(conn, new_wage)
+            st.session_state.salary_update_preview = preview_df
+    
+    if 'salary_update_preview' in st.session_state and not st.session_state.salary_update_preview.empty:
+        st.write("##### 預覽清單：")
+        st.dataframe(st.session_state.salary_update_preview, use_container_width=True)
+        st.warning(f"共有 {len(st.session_state.salary_update_preview)} 位員工的底薪將從「目前底薪」調整為 NT$ {new_wage}。")
+        
+        if st.button("Step 2: 確認執行更新", type="primary"):
+            with st.spinner("正在為以上員工批次新增調薪紀錄..."):
+                count = batch_update_basic_salary(conn, st.session_state.salary_update_preview, new_wage, effective_date)
+                st.success(f"成功為 {count} 位員工更新了基本工資！")
+                # 清除預覽，避免重複操作
+                del st.session_state.salary_update_preview
+                st.rerun()
 
     # --- 1. 顯示所有歷史紀錄 (Read) ---
     st.subheader("歷史異動總覽")
