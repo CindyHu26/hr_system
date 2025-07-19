@@ -1,4 +1,4 @@
-# page_insurance_grade.py (已整合起算日功能)
+# page_insurance_grade.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -23,7 +23,6 @@ def show_page(conn):
         
         st.subheader("歷史級距總覽")
         if not grades_df.empty:
-            # 讓使用者可以依版本 (起算日) 篩選
             versions = sorted(pd.to_datetime(grades_df['start_date']).unique(), reverse=True)
             selected_version_date = st.selectbox(
                 "選擇要檢視的版本 (依起算日)", 
@@ -49,8 +48,6 @@ def show_page(conn):
     st.write("---")
     st.subheader("資料更新")
     
-    # --- 2. 資料更新區塊 ---
-    # **核心修正：加入起算日選擇器**
     start_date = st.date_input("請選擇此份資料的「適用起算日」", value=date(datetime.now().year, 1, 1))
     
     tab1, tab2 = st.tabs(["👷 勞工保險", "🏥 全民健康保險"])
@@ -58,7 +55,12 @@ def show_page(conn):
     # --- 勞保更新頁籤 ---
     with tab1:
         st.markdown("##### 更新勞工保險投保薪資分級表")
-        labor_url = st.text_input("勞保局保費分攤表網址", value="https://www.bli.gov.tw/0011588.html")
+        # ******** 核心修正 1 ********
+        labor_url = st.text_input(
+            "勞保局保費分攤表網址", 
+            value="https://www.bli.gov.tw/0011588.html",
+            key="labor_url_input"  # 加上唯一的 key
+        )
         st.markdown(f"請從 [勞保局網站]({labor_url}) 下載適用於 **{start_date}** 之後的 Excel 檔案 (.xls)，並直接上傳。")
         
         uploaded_labor_file = st.file_uploader("上傳勞保級距 Excel 檔", type=['xls', 'xlsx'], key="labor_uploader")
@@ -71,7 +73,6 @@ def show_page(conn):
                 st.dataframe(parsed_df)
                 
                 if st.button(f"✅ 確認匯入「勞保」級距表", type="primary"):
-                    # **核心修正：傳入起算日**
                     count = batch_insert_insurance_grades(conn, parsed_df, 'labor', start_date)
                     st.success(f"成功匯入 {count} 筆起算日為 {start_date} 的勞保級距資料！")
                     st.rerun()
@@ -80,11 +81,15 @@ def show_page(conn):
 
     # --- 健保更新頁籤 ---
     with tab2:
-        st.markdown("#### 更新健保投保金額分級表")
-        st.markdown("系統可直接解析健保署網頁，或讓您手動上傳備用。")
+        st.markdown("##### 更新健保投保金額分級表")
         update_method = st.radio("選擇更新方式", ("從網頁自動解析 (建議)", "手動上傳檔案 (備用)"), key="health_method", horizontal=True)
         if update_method == "從網頁自動解析 (建議)":
-            health_url = st.text_input("健保署保費負擔金額表網址", value="https://www.nhi.gov.tw/ch/cp-17545-f87bd-2576-1.html")
+            # ******** 核心修正 2 ********
+            health_url = st.text_input(
+                "健保署保費負擔金額表網址", 
+                value="https://www.nhi.gov.tw/ch/cp-17545-f87bd-2576-1.html",
+                key="health_url_input" # 加上唯一的 key
+            )
             if st.button("🔗 解析網址並預覽"):
                 if not health_url:
                     st.warning("請貼上健保署的網址。")
@@ -100,14 +105,37 @@ def show_page(conn):
                     except Exception as e:
                         st.error(f"處理失敗: {e}")
                         st.session_state.parsed_health_df = None
+            
             if 'parsed_health_df' in st.session_state and st.session_state.parsed_health_df is not None:
-                st.markdown("##### 解析結果預覽")
+                st.markdown(f"##### 解析結果預覽 (將以 **{start_date}** 作為起算日匯入)")
                 st.dataframe(st.session_state.parsed_health_df)
-                if st.button("✅ 確認將預覽資料寫入「健保」級距表", type="primary"):
-                    count = batch_insert_insurance_grades(conn, st.session_state.parsed_health_df, 'health')
-                    st.success(f"成功匯入 {count} 筆健保級距資料！頁面將自動刷新。")
-                    del st.session_state.parsed_health_df
-                    st.rerun()
+                if st.button(f"✅ 確認匯入「健保」級距表", type="primary"):
+                    try:
+                        count = batch_insert_insurance_grades(conn, st.session_state.parsed_health_df, 'health', start_date)
+                        st.success(f"成功匯入 {count} 筆起算日為 {start_date} 的健保級距資料！")
+                        del st.session_state.parsed_health_df
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"寫入資料庫時發生錯誤：{e}")
+
+        else: # 手動上傳
+            st.markdown("如果網頁解析失敗，請從健保署網站下載資料，手動整理成 Excel 或 CSV 後上傳。")
+            uploaded_health_file = st.file_uploader("上傳健保級距檔 (Excel/CSV)", type=['csv', 'xlsx'], key="health_uploader")
+            if uploaded_health_file:
+                try:
+                    if uploaded_health_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_health_file)
+                    else:
+                        df = pd.read_excel(uploaded_health_file)
+
+                    st.markdown(f"##### 檔案預覽 (將以 **{start_date}** 作為起算日匯入)")
+                    st.dataframe(df.head())
+                    if st.button("✅ 確認匯入此手動上傳檔案", type="primary", key="manual_health_import"):
+                        count = batch_insert_insurance_grades(conn, df, 'health', start_date)
+                        st.success(f"成功手動匯入 {count} 筆起算日為 {start_date} 的健保級距資料！")
+                        st.rerun()
+                except Exception as e:
+                     st.error(f"處理手動上傳檔案時發生錯誤：{e}")
 
     # --- 手動單筆維護 (維持原樣) ---
     with st.expander("✏️ 手動單筆微調 (適用勞健保)"):
