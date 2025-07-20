@@ -1,7 +1,7 @@
 # page_crud_attendance.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, time
 import re
 import traceback
 from utils import (
@@ -45,9 +45,10 @@ def show_page(conn):
                     selected_emp_display = st.selectbox("選擇員工", options=emp_options.keys())
                     att_date = st.date_input("出勤日期", value=None)
                     c1_form, c2_form = st.columns(2)
-                    checkin = c1_form.text_input("簽到時間 (格式 HH:MM:SS)", placeholder="08:00:00")
-                    checkout = c2_form.text_input("簽退時間 (格式 HH:MM:SS)", placeholder="17:00:00")
-                    
+                    checkin_time_obj = c1_form.time_input("簽到時間", value=(8, 0)) # value=time(8, 0) 可設定預設值
+                    checkin = checkin_time_obj.strftime('%H:%M:%S') if checkin_time_obj else None
+                    checkout_time_obj = c1_form.time_input("簽退時間", value=(17, 0)) # value=time(8, 0) 可設定預設值
+                    checkout = checkout_time_obj.strftime('%H:%M:%S') if checkout_time_obj else None                   
                     submitted = st.form_submit_button("新增紀錄")
                     if submitted:
                         if selected_emp_display and att_date:

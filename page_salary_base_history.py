@@ -141,8 +141,8 @@ def show_page(conn):
                     dependents_edit = c2.number_input("眷屬數", min_value=0.0, step=0.01, format="%.2f", value=float(record_data['dependents']))
 
                     # 安全地轉換日期
-                    start_date_val = datetime.strptime(record_data['start_date'], '%Y-%m-%d').date() if record_data['start_date'] else None
-                    end_date_val = datetime.strptime(record_data['end_date'], '%Y-%m-%d').date() if pd.notna(record_data['end_date']) else None
+                    start_date_val = pd.to_datetime(record_data['start_date']).date() if pd.notna(record_data['start_date']) else None
+                    end_date_val = pd.to_datetime(record_data['end_date']).date() if pd.notna(record_data['end_date']) else None
 
                     c3, c4 = st.columns(2)
                     start_date_edit = c3.date_input("生效日", value=start_date_val)
