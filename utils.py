@@ -22,7 +22,9 @@ EMPLOYEE_COLUMNS_MAP = {
     'id': '系統ID', 'name_ch': '姓名', 'hr_code': '員工編號', 'id_no': '身份證號',
     'dept': '部門', 'title': '職稱', 'entry_date': '到職日', 'resign_date': '離職日',
     'gender': '性別', 'birth_date': '生日', 'phone': '電話', 'address': '地址',
-    'bank_account': '銀行帳號', 'note': '備註'
+    'bank_account': '銀行帳號', 'note': '備註',
+    'nationality': '國籍',
+    'arrival_date': '首次抵台日期'
 }
 
 COMPANY_COLUMNS_MAP = {

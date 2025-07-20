@@ -12,10 +12,12 @@ def create_tables(conn):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name_ch TEXT NOT NULL,
         id_no TEXT NOT NULL,
-        entry_date DATE,              -- 允許NULL
+        entry_date DATE,
         hr_code TEXT,
         gender TEXT,
         birth_date DATE,
+        nationality TEXT DEFAULT 'TW',
+        arrival_date DATE,
         phone TEXT,
         address TEXT,
         dept TEXT,
@@ -112,6 +114,7 @@ def create_tables(conn):
         month INTEGER NOT NULL,
         pay_date DATE,
         note TEXT,
+        bank_transfer_override INTEGER,
         FOREIGN KEY(employee_id) REFERENCES employee(id)
     )
     """)

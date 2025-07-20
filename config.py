@@ -33,3 +33,18 @@ LABOR_INSURANCE_URL = "https://www.bli.gov.tw/0011588.html"
 
 # 全民健康保險署 - 保險費負擔金額表
 HEALTH_INSURANCE_URL = "https://www.nhi.gov.tw/ch/cp-17545-f87bd-2576-1.html"
+
+# ==============================================================================
+# 外籍人士稅務設定 (Foreigner Tax Settings)
+# ==============================================================================
+# 注意：此處僅為「非居住者」的預扣規則。若外籍人士為「居住者」，則適用本國人規則。
+
+# 基本工資的倍數，用於判斷適用 6% 還是 18% 稅率
+# 法規為 1.5 倍
+FOREIGNER_TAX_RATE_THRESHOLD_MULTIPLIER = 1.5
+
+# 全月薪資總額 <= 基本工資*1.5倍 時的稅率
+FOREIGNER_LOW_INCOME_TAX_RATE = 0.06 # 6%
+
+# 全月薪資總額 > 基本工資*1.5倍 時的稅率
+FOREIGNER_HIGH_INCOME_TAX_RATE = 0.18 # 18%
