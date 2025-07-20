@@ -10,7 +10,7 @@ from utils import (
     delete_employee,
     EMPLOYEE_COLUMNS_MAP
 )
-# [新增] 定義國籍中英文對照表
+
 NATIONALITY_MAP = {
     '台灣': 'TW',
     '泰國': 'TH',
@@ -18,21 +18,24 @@ NATIONALITY_MAP = {
     '越南': 'VN',
     '菲律賓': 'PH'
 }
-# 建立一個反向的對照表，方便從英文簡稱找到中文顯示名稱
 NATIONALITY_MAP_REVERSE = {v: k for k, v in NATIONALITY_MAP.items()}
 
 def show_page(conn):
     """
     顯示員工資料管理頁面 (CRUD) 的主函式
     """
-    st.header("員工資料管理")
+    st.header("員工管理")
 
     st.subheader("員工列表")
     try:
         all_emp_df_raw = get_all_employees(conn)
-        if 'nationality' in all_emp_df_raw.columns:
-            all_emp_df_raw['nationality'] = all_emp_df_raw['nationality'].map(NATIONALITY_MAP_REVERSE).fillna(all_emp_df_raw['nationality'])
-        all_emp_df_display = all_emp_df_raw.rename(columns=EMPLOYEE_COLUMNS_MAP)
+        display_columns_map = EMPLOYEE_COLUMNS_MAP.copy()
+        
+        all_emp_df_display = all_emp_df_raw.copy()
+        if 'nationality' in all_emp_df_display.columns:
+            all_emp_df_display['nationality'] = all_emp_df_display['nationality'].map(NATIONALITY_MAP_REVERSE).fillna(all_emp_df_display['nationality'])
+            
+        all_emp_df_display = all_emp_df_display.rename(columns=display_columns_map)
         st.dataframe(all_emp_df_display)
     except Exception as e:
         st.error(f"無法讀取員工資料: {e}")
@@ -41,18 +44,18 @@ def show_page(conn):
     st.subheader("資料操作")
     crud_option = st.selectbox("選擇操作", ["新增 (Create)", "修改 (Update) / 刪除 (Delete)"])
 
-    # --- 新增員工 ---
     if crud_option == "新增 (Create)":
         with st.form("add_employee_form", clear_on_submit=True):
             st.write("請填寫新員工資料：")
             c1, c2, c3 = st.columns(3)
             
-            name_ch_add = c1.text_input(EMPLOYEE_COLUMNS_MAP['name_ch'], key="add_name")
-            hr_code_add = c2.text_input(EMPLOYEE_COLUMNS_MAP['hr_code'], key="add_hr_code")
-            id_no_add = c3.text_input(EMPLOYEE_COLUMNS_MAP['id_no'], key="add_id_no")
+            name_ch_add = c1.text_input(EMPLOYEE_COLUMNS_MAP['name_ch'] + "*", key="add_name")
+            hr_code_add = c2.text_input(EMPLOYEE_COLUMNS_MAP['hr_code'] + "*", key="add_hr_code")
+            id_no_add = c3.text_input(EMPLOYEE_COLUMNS_MAP['id_no'] + "*", key="add_id_no")
             dept_add = c1.text_input(EMPLOYEE_COLUMNS_MAP['dept'], key="add_dept")
             title_add = c2.text_input(EMPLOYEE_COLUMNS_MAP['title'], key="add_title")
-            gender_add = c3.selectbox(EMPLOYEE_COLUMNS_MAP['gender'], [None, "男", "女"], key="add_gender")
+            gender_add = c3.selectbox(EMPLOYEE_COLUMNS_MAP['gender'], [None, "男", "女"], key="add_gender", index=0)
+            
             nationality_add_display = c1.selectbox("國籍", options=list(NATIONALITY_MAP.keys()), key="add_nationality")
             arrival_date_add = c2.date_input("首次抵台日期 (外籍人士適用)", value=None, key="add_arrival_date")
             entry_date_add = c3.date_input(EMPLOYEE_COLUMNS_MAP['entry_date'], value=None, key="add_entry_date")
@@ -77,13 +80,15 @@ def show_page(conn):
                     'note': note_add
                 }
 
-                for key, value in new_data.items():
-                    if not value or str(value).strip() == "":
-                        new_data[key] = None
-                
-                if not new_data['name_ch'] or not new_data['hr_code']:
-                    st.error("姓名與員工編號為必填欄位！")
+                # --- [核心修正] ---
+                # 擴充必填欄位的檢查
+                if not all([new_data['name_ch'], new_data['hr_code'], new_data['id_no']]):
+                    st.error("姓名、員工編號、身份證號為必填欄位！")
                 else:
+                    # 將空字串轉換為 None
+                    for key, value in new_data.items():
+                        if isinstance(value, str) and not value.strip():
+                            new_data[key] = None
                     try:
                         add_employee(conn, new_data)
                         st.success(f"成功新增員工：{new_data['name_ch']}")
@@ -93,7 +98,6 @@ def show_page(conn):
                     except Exception as e:
                         st.error(f"發生未知錯誤：{e}")
 
-    # --- 修改/刪除員工 ---
     elif crud_option == "修改 (Update) / 刪除 (Delete)":
         st.write("請先從下方選擇一位員工進行操作：")
         if not all_emp_df_raw.empty:
@@ -110,21 +114,19 @@ def show_page(conn):
                     
                     def to_date(date_string):
                         if date_string and pd.notna(date_string):
-                            try:
-                                return pd.to_datetime(date_string).date()
-                            except (ValueError, TypeError):
-                                return None
+                            try: return pd.to_datetime(date_string).date()
+                            except (ValueError, TypeError): return None
                         return None
 
                     with st.form("update_employee_form"):
                         c1, c2, c3 = st.columns(3)
-                        name_ch_input = c1.text_input(EMPLOYEE_COLUMNS_MAP['name_ch'], value=selected_employee.get('name_ch', ''))
-                        hr_code_input = c2.text_input(EMPLOYEE_COLUMNS_MAP['hr_code'], value=selected_employee.get('hr_code', ''))
-                        id_no_input = c3.text_input(EMPLOYEE_COLUMNS_MAP['id_no'], value=selected_employee.get('id_no', ''))
+                        name_ch_input = c1.text_input(EMPLOYEE_COLUMNS_MAP['name_ch'] + "*", value=selected_employee.get('name_ch', ''))
+                        hr_code_input = c2.text_input(EMPLOYEE_COLUMNS_MAP['hr_code'] + "*", value=selected_employee.get('hr_code', ''))
+                        id_no_input = c3.text_input(EMPLOYEE_COLUMNS_MAP['id_no'] + "*", value=selected_employee.get('id_no', ''))
                         
                         dept_input = c1.text_input(EMPLOYEE_COLUMNS_MAP['dept'], value=selected_employee.get('dept', '') or '')
                         title_input = c2.text_input(EMPLOYEE_COLUMNS_MAP['title'], value=selected_employee.get('title', '') or '')
-                        gender_options = [None, "男", "女"]
+                        gender_options = ["男", "女"]
                         current_gender = selected_employee.get('gender')
                         gender_index = gender_options.index(current_gender) if current_gender in gender_options else 0
                         gender_input = c3.selectbox(EMPLOYEE_COLUMNS_MAP['gender'], gender_options, index=gender_index)
@@ -157,16 +159,18 @@ def show_page(conn):
                                 'note': note_input,
                             }
                             
-                            for key, value in updated_data.items():
-                                if not value or str(value).strip() == "":
-                                    updated_data[key] = None
-
-                            try:
-                                update_employee(conn, selected_id, updated_data)
-                                st.success(f"成功更新員工 {updated_data['name_ch']} 的資料！")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"更新時發生錯誤：{e}")
+                            if not all([updated_data['name_ch'], updated_data['hr_code'], updated_data['id_no']]):
+                                st.error("姓名、員工編號、身份證號為必填欄位！")
+                            else:
+                                for key, value in updated_data.items():
+                                    if isinstance(value, str) and not value.strip():
+                                        updated_data[key] = None
+                                try:
+                                    update_employee(conn, selected_id, updated_data)
+                                    st.success(f"成功更新員工 {updated_data['name_ch']} 的資料！")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"更新時發生錯誤：{e}")
 
                     if st.button("🔴 刪除這位員工", key=f"delete_{selected_id}"):
                         st.warning(f"您確定要永久刪除 **{selected_employee['name_ch']}** 嗎？此操作無法復原！")

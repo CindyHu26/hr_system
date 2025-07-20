@@ -143,7 +143,7 @@ def show_page(conn):
             previous_non_insured = get_previous_non_insured_names(conn, year, month)
             default_selection = [name for name in previous_non_insured if name in all_emp_names_in_draft]
             
-            non_insured_names = st.multiselect("選擇非公司加保 (勞健保自理) 的員工", options=all_emp_names_in_draft, default=default_selection)
+            non_insured_names = st.multiselect("選擇勞健保不計(=0)的員工", options=all_emp_names_in_draft, default=default_selection)
 
             recalculated_draft, _ = calculate_salary_df(conn, year, month, non_insured_names=non_insured_names)
             st.session_state.salary_draft_df = recalculated_draft
