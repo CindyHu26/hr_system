@@ -160,3 +160,49 @@ def delete_employee_salary_item(conn, record_id):
     cursor.execute(sql, (record_id,))
     conn.commit()
     return cursor.rowcount
+
+def save_salary_draft(conn, year, month, df: pd.DataFrame):
+    cursor = conn.cursor()
+    emp_map = pd.read_sql("SELECT id, name_ch FROM employee", conn).set_index('name_ch')['id'].to_dict()
+    item_map = pd.read_sql("SELECT id, name FROM salary_item", conn).set_index('name')['id'].to_dict()
+    for _, row in df.iterrows():
+        emp_id = emp_map.get(row['員工姓名'])
+        if not emp_id: continue
+        cursor.execute("INSERT INTO salary (employee_id, year, month, status) VALUES (?, ?, ?, 'draft') ON CONFLICT(employee_id, year, month) DO UPDATE SET status = 'draft' WHERE status != 'final'", (emp_id, year, month))
+        salary_id = cursor.execute("SELECT id FROM salary WHERE employee_id = ? AND year = ? AND month = ?", (emp_id, year, month)).fetchone()[0]
+        cursor.execute("DELETE FROM salary_detail WHERE salary_id = ?", (salary_id,))
+        details_to_insert = [(salary_id, item_map.get(k), int(v)) for k, v in row.items() if item_map.get(k) and v != 0]
+        if details_to_insert:
+            cursor.executemany("INSERT INTO salary_detail (salary_id, salary_item_id, amount) VALUES (?, ?, ?)", details_to_insert)
+    conn.commit()
+
+def finalize_salary_records(conn, year, month, df: pd.DataFrame):
+    cursor = conn.cursor()
+    emp_map = pd.read_sql("SELECT id, name_ch FROM employee", conn).set_index('name_ch')['id'].to_dict()
+    for _, row in df.iterrows():
+        emp_id = emp_map.get(row['員工姓名'])
+        if not emp_id: continue
+        params = {
+            'total_payable': row.get('應付總額', 0), 'total_deduction': row.get('應扣總額', 0),
+            'net_salary': row.get('實發薪資', 0), 'bank_transfer_amount': row.get('匯入銀行', 0),
+            'cash_amount': row.get('現金', 0), 'status': 'final',
+            'employee_id': emp_id, 'year': year, 'month': month
+        }
+        cursor.execute("""
+            UPDATE salary SET
+            total_payable = :total_payable, total_deduction = :total_deduction,
+            net_salary = :net_salary, bank_transfer_amount = :bank_transfer_amount,
+            cash_amount = :cash_amount, status = :status
+            WHERE employee_id = :employee_id AND year = :year AND month = :month
+        """, params)
+    conn.commit()
+
+def revert_salary_to_draft(conn, year, month, employee_ids: list):
+    if not employee_ids: return 0
+    cursor = conn.cursor()
+    placeholders = ','.join('?' for _ in employee_ids)
+    sql = f"UPDATE salary SET status = 'draft' WHERE year = ? AND month = ? AND employee_id IN ({placeholders}) AND status = 'final'"
+    params = [year, month] + employee_ids
+    cursor.execute(sql, params)
+    conn.commit()
+    return cursor.rowcount

@@ -76,6 +76,19 @@ def create_tables(conn):
     )
     """)
 
+    # 特別出勤紀錄表 (用於計算津貼加班等非標準出勤)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS special_attendance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER NOT NULL,
+        date DATE NOT NULL,
+        checkin_time TIME NOT NULL,
+        checkout_time TIME NOT NULL,
+        note TEXT,
+        FOREIGN KEY(employee_id) REFERENCES employee(id) ON DELETE CASCADE
+    )
+    """)
+
     # 請假紀錄表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS leave_record (
@@ -105,17 +118,28 @@ def create_tables(conn):
     )
     """)
 
-    # 薪資紀錄主表
+    # 薪資紀錄主表 (V2 - 增加狀態與總額欄位)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS salary (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER NOT NULL,
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
+        status TEXT DEFAULT 'draft',          -- 狀態: 'draft' 或 'final'
         pay_date DATE,
+        
+        -- 應付/應扣/實發 總額 (定版後儲存)
+        total_payable FLOAT DEFAULT 0,      -- 應付總額 (您建議的名稱)
+        total_deduction FLOAT DEFAULT 0,    -- 應扣總額
+        net_salary FLOAT DEFAULT 0,         -- 實發薪資
+
+        -- 支付方式 (定版後儲存)
+        bank_transfer_amount FLOAT DEFAULT 0, -- 匯入銀行金額
+        cash_amount FLOAT DEFAULT 0,          -- 現金支付金額
+
         note TEXT,
-        bank_transfer_override INTEGER,
-        FOREIGN KEY(employee_id) REFERENCES employee(id)
+        FOREIGN KEY(employee_id) REFERENCES employee(id),
+        UNIQUE(employee_id, year, month)    -- 確保每位員工每月只有一筆主紀錄
     )
     """)
 

@@ -39,24 +39,28 @@ def show_page(conn):
             with st.expander("新增單筆出勤紀錄"):
                 with st.form("add_attendance_form", clear_on_submit=True):
                     all_employees = get_all_employees(conn)
-                    # 建立 姓名(編號) -> ID 的對應字典
                     emp_options = {f"{name} ({code})": emp_id for name, code, emp_id in zip(all_employees['name_ch'], all_employees['hr_code'], all_employees['id'])}
                     
                     selected_emp_display = st.selectbox("選擇員工", options=emp_options.keys())
                     att_date = st.date_input("出勤日期", value=None)
                     c1_form, c2_form = st.columns(2)
-                    checkin_time_obj = c1_form.time_input("簽到時間", value=(8, 0)) # value=time(8, 0) 可設定預設值
-                    checkin = checkin_time_obj.strftime('%H:%M:%S') if checkin_time_obj else None
-                    checkout_time_obj = c1_form.time_input("簽退時間", value=(17, 0)) # value=time(8, 0) 可設定預設值
-                    checkout = checkout_time_obj.strftime('%H:%M:%S') if checkout_time_obj else None                   
+
+                    # --- 2. [核心修正] 將預設值改為正確的 time 物件 ---
+                    checkin_time_obj = c1_form.time_input("簽到時間", value=time(8, 0))
+                    checkout_time_obj = c2_form.time_input("簽退時間", value=time(17, 0))
+                    
                     submitted = st.form_submit_button("新增紀錄")
                     if submitted:
+                        # 將 time 物件轉換為字串再存入資料庫
+                        checkin_str = checkin_time_obj.strftime('%H:%M:%S') if checkin_time_obj else None
+                        checkout_str = checkout_time_obj.strftime('%H:%M:%S') if checkout_time_obj else None
+
                         if selected_emp_display and att_date:
                             new_data = {
                                 'employee_id': emp_options[selected_emp_display],
                                 'date': att_date.strftime('%Y-%m-%d'),
-                                'checkin_time': checkin or None,
-                                'checkout_time': checkout or None
+                                'checkin_time': checkin_str,
+                                'checkout_time': checkout_str
                             }
                             add_attendance_record(conn, new_data)
                             st.success("新增成功！")

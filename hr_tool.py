@@ -5,18 +5,17 @@ from utils import init_connection
 from page_crud_employee import show_page as show_employee_page
 from page_crud_company import show_page as show_company_page
 from page_crud_attendance import show_page as show_attendance_crud_page
+from page_insurance_history import show_page as show_insurance_history_page
+from page_special_attendance import show_page as show_special_attendance_page
 from page_leave_analysis import show_page as show_analysis_page
 from page_salary_item import show_page as show_salary_item_page
 from page_salary_base_history import show_page as show_salary_base_history_page
 from page_insurance_grade import show_page as show_insurance_grade_page
 from page_allowance_setting import show_page as show_allowance_setting_page
 from page_salary_calculation import show_page as show_salary_calculation_page
-try:
-    from page_insurance_history import show_page as show_insurance_history_page
-except ImportError:
-    def show_insurance_history_page(conn):
-        st.error("錯誤：'page_insurance_history.py' 檔案不存在或無法匯入。")
-        st.info("請確認您已根據先前的指示建立此檔案。")
+from page_annual_summary import show_page as show_annual_summary_page
+from page_nhi_summary import show_page as show_nhi_summary_page
+
 
 # --- [核心修改] 設定頁面為寬版佈局 ---
 # 這必須是第一個執行的 Streamlit 指令
@@ -36,7 +35,9 @@ PAGES_ADMIN = {
 # 2. 出勤與假務
 PAGES_ATTENDANCE = {
     "📅 出勤紀錄管理": show_attendance_crud_page,
+    "📝 特別出勤管理 (津貼加班)": show_special_attendance_page,
     "🌴 請假與異常分析": show_analysis_page,
+    
 }
 
 # 3. 薪資核心功能
@@ -46,6 +47,8 @@ PAGES_SALARY = {
     "📈 員工底薪／眷屬異動": show_salary_base_history_page,
     "➕ 員工常態薪資項設定": show_allowance_setting_page,
     "💵 薪資單產生與管理": show_salary_calculation_page,
+    "📊 年度薪資總表": show_annual_summary_page,
+    "健保補充保費試算": show_nhi_summary_page,
 }
 
 # 將所有頁面字典合併成一個總字典，方便後續查找
