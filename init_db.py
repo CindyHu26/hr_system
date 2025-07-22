@@ -11,9 +11,9 @@ def create_tables(conn):
     CREATE TABLE IF NOT EXISTS employee (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name_ch TEXT NOT NULL,
-        id_no TEXT NOT NULL,
+        id_no TEXT NOT NULL UNIQUE,
         entry_date DATE,
-        hr_code TEXT,
+        hr_code TEXT UNIQUE,
         gender TEXT,
         birth_date DATE,
         nationality TEXT DEFAULT 'TW',
